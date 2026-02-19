@@ -124,6 +124,8 @@ class Config():
         self.unmarked_entries_path = None
         self.spoofed_apps = ''
         self.force_ksud_mount_selection = False
+        self.pif_chunk_size = 8*1024*1024  # 8MB default
+        self.pif_chunk_overlap = 200        # 200 bytes default
 
         self.toolbar = {
             'tb_position': 'top',
@@ -346,6 +348,10 @@ class Config():
                     conf.spoofed_apps = data['spoofed_apps']
                 with contextlib.suppress(KeyError):
                     conf.force_ksud_mount_selection = data['force_ksud_mount_selection']
+                with contextlib.suppress(KeyError):
+                    conf.pif_chunk_size = data['pif_chunk_size']
+                with contextlib.suppress(KeyError):
+                    conf.pif_chunk_overlap = data['pif_chunk_overlap']
 
                 # read the toolbar section
                 with contextlib.suppress(KeyError):
@@ -552,7 +558,9 @@ class Config():
             'unmarked_entries_path': self.unmarked_entries_path,
             'ksu_asset_selection_mode': self.ksu_asset_selection_mode,
             'spoofed_apps': self.spoofed_apps,
-            'force_ksud_mount_selection': self.force_ksud_mount_selection
+            'force_ksud_mount_selection': self.force_ksud_mount_selection,
+            'pif_chunk_size': self.pif_chunk_size,
+            'pif_chunk_overlap': self.pif_chunk_overlap
         }
         with open(file_path, 'w', encoding="ISO-8859-1", errors="replace", newline='\n') as f:
             json.dump(data, f, indent=4)

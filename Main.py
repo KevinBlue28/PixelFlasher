@@ -999,7 +999,7 @@ class PixelFlasher(wx.Frame):
                     print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while checking for updates")
                     traceback.print_exc()
             end = time.time()
-            print(f"Load time: {math.ceil(end - start)} seconds")
+            print(f"Total Load time: {math.ceil(end - start)} seconds")
 
             # set the ui fonts
             try:
@@ -3257,6 +3257,7 @@ class PixelFlasher(wx.Frame):
     def _print_device_details(self, device):
         m_version = 0
         m_app_version = 0
+        start = time.time()
 
         print('')
         message = '=======================================\n'
@@ -3404,6 +3405,8 @@ class PixelFlasher(wx.Frame):
         puml(f"note right\n{message}\nend note\n")
         self._check_for_bad_magisk(m_version, m_app_version)
         self._check_for_bad_kernel(device.kernel)
+        end = time.time()
+        print(f"Device Load time: {math.ceil(end - start)} seconds")
 
     # -----------------------------------------------
     #                  get_vbmeta

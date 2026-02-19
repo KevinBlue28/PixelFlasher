@@ -2297,7 +2297,7 @@ def kernel_flavors(self, default_button, radio_initial_value, kernel_recommendat
         default_button = 1
     button_texts[default_button -1] += _(" (Recommended)")
     radio_labels=[_("Latest Release"), _("Latest Pre-Release"), _("Latest Release or Pre-Release")]
-    checkbox_labels=[_("Let me choose the kernel version from a matching list"), _("Show all assets including non-matching ones")]
+    checkbox_labels=[_("Let me choose the kernel version from a matching list"), _("Show all assets including non-matching ones"), _("Search older releases if asset not found in latest")]
     if not checkbox_initial_values:
         checkbox_initial_values=[False, False]
 
@@ -4235,6 +4235,9 @@ Unless you know what you're doing, it is recommended that you choose the default
         # Check if get_all checkbox is selected
         get_all = res['checkbox_values'][1]
 
+        # Check if search_all_releases checkbox is selected
+        search_all_releases = res['checkbox_values'][2] if len(res['checkbox_values']) > 2 else False
+
         # Get checkbox values from the result
         checkbox_values = res.get('checkbox_values', [])
         print(f"Checkbox values received: {checkbox_values}")
@@ -4290,7 +4293,7 @@ Unless you know what you're doing, it is recommended that you choose the default
 
         if res['button'] != 6:
             # download the selected KernelSU generic kernel image
-            kernel_su_gz_file = download_ksu_latest_release_asset(user=user, repo=repo, asset_name=look_for_kernelsu, anykernel=anykernel, custom_kernel=custom_kernel, include_prerelease = include_prerelease, latest_any=latest_any, version_choice=version_choice, get_all=get_all)
+            kernel_su_gz_file = download_ksu_latest_release_asset(user=user, repo=repo, asset_name=look_for_kernelsu, anykernel=anykernel, custom_kernel=custom_kernel, include_prerelease = include_prerelease, latest_any=latest_any, version_choice=version_choice, get_all=get_all, search_all_releases=search_all_releases)
             if kernel_su_gz_file:
                 kernelsu_version = get_gh_latest_release_version(user, repo)
 

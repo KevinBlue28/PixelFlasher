@@ -251,6 +251,19 @@ class MagiskApk():
 
 
 # ============================================================================
+#                               Class DownloadState
+# ============================================================================
+class DownloadState:
+    def __init__(self):
+        self.stop_event = threading.Event()
+        self.downloaded_bytes = 0
+        self.file_size = 0
+        self.download_complete = False
+        self.fingerprint = None
+        self.security_patch = None
+
+
+# ============================================================================
 #                               Function get_app_language
 # ============================================================================
 def get_app_language():
@@ -1344,20 +1357,59 @@ def get_devices_file_path():
     return os.path.join(get_config_path(), "devices.json").strip()
 
 
+_devices_json_cache = None
+_devices_json_cache_mtime = 0
+_devices_json_cache_path = None
+
 # ============================================================================
 #                           Function load_devices_json
+# Cache for devices.json to avoid repeated file I/O
 # ============================================================================
 def load_devices_json():
+    # Load devices.json with caching to improve performance.
+    # The file is cached in memory and only reloaded if the file has been modified.
+    # This reduces I/O overhead when multiple operations need device data.
+    global _devices_json_cache, _devices_json_cache_mtime, _devices_json_cache_path
+
     try:
         file_path = get_devices_file_path()
+
+        # Check if we have a valid cached version
+        if (_devices_json_cache is not None and
+            _devices_json_cache_path == file_path and
+            os.path.exists(file_path)):
+
+            current_mtime = os.path.getmtime(file_path)
+            if current_mtime == _devices_json_cache_mtime:
+                return _devices_json_cache
+
+        # Load from disk
         if os.path.exists(file_path):
             encoding = detect_encoding(file_path)
             with open(file_path, 'r', encoding=encoding, errors="replace") as f:
                 data = json.load(f)
-                return data.get('devices', {})
+                devices = data.get('devices', {})
+
+                # Update cache
+                _devices_json_cache = devices
+                _devices_json_cache_mtime = os.path.getmtime(file_path)
+                _devices_json_cache_path = file_path
+
+                return devices
     except Exception as e:
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Error loading devices.json: {e}")
     return {}
+
+
+# ============================================================================
+#                         Function invalidate_devices_json_cache
+# ============================================================================
+def invalidate_devices_json_cache():
+    # Invalidate the devices.json cache. Call this after saving devices.json.
+    global _devices_json_cache, _devices_json_cache_mtime, _devices_json_cache_path
+    _devices_json_cache = None
+    _devices_json_cache_mtime = 0
+    _devices_json_cache_path = None
 
 
 # ============================================================================
@@ -1371,6 +1423,10 @@ def save_devices_json(devices_data):
             json.dump(data, f, indent=2, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
+
+        # Invalidate cache since file has been modified
+        invalidate_devices_json_cache()
+
         return True
     except Exception as e:
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Error saving devices.json: {e}")
@@ -2331,7 +2387,7 @@ def extract_fingerprint(binfile):
 # ============================================================================
 def debug(message):
     if get_verbose():
-        print(f"debug: {message}")
+        print(f"debug: {message}", flush=True)
 
 
 # ============================================================================
@@ -3707,7 +3763,7 @@ def select_pif_device(devices_data, default_selection=None, device_type=""):
 # ============================================================================
 #                 Function get_beta_pif
 # ============================================================================
-def get_beta_pif(device_model='random', force_version=None):
+def get_beta_pif(device_model='random', force_version=None, state=None):
     # Get the latest Android version
     latest_version, latest_version_url = get_latest_android_version(force_version)
     print(f"Selected Version:         {latest_version}")
@@ -3722,6 +3778,9 @@ def get_beta_pif(device_model='random', force_version=None):
         # the code should never get here
         pass
     else:
+        # If force_version is provided but no valid latest version is found, use the forced version
+        if force_version and latest_version == 0:
+            latest_version = force_version
         # set the url to the latest version
         ota_url = f"https://developer.android.com/about/versions/{latest_version}/download-ota"
         factory_url = f"https://developer.android.com/about/versions/{latest_version}/download"
@@ -3755,6 +3814,8 @@ def get_beta_pif(device_model='random', force_version=None):
         ota_date_object = None
         factory_date_object = None
         gsi_date_object = None
+        model_list = []
+        product_list = []
         if ota_data:
             ota_date = ota_data.__dict__['release_date']
             ota_date_object = datetime.strptime(ota_date, "%B %d, %Y")
@@ -3950,7 +4011,11 @@ def get_beta_pif(device_model='random', force_version=None):
                     selected_url = ota_data.__dict__['devices'][-1]['url']
                     debug(f"  Using last OTA device: {ota_data.__dict__['devices'][-1]['zip_filename']}")
                 # Grab fp and sp from selected OTA zip
-                fingerprint, security_patch = url2fpsp(selected_url, "ota")
+                fingerprint, security_patch = url2fpsp(selected_url, "ota", state=state)
+                # Check if abort was triggered (but not if we got valid results - stop_event is set on success too)
+                if state and state.stop_event.is_set() and (not fingerprint or not security_patch):
+                    debug("Processing aborted by user in OTA")
+                    return -1
                 if fingerprint and security_patch:
                     model_list = []
                     product_list = []
@@ -3995,7 +4060,11 @@ def get_beta_pif(device_model='random', force_version=None):
                     selected_url = factory_data.__dict__['devices'][-1]['url']
                     debug(f"  Using last Factory device: {factory_data.__dict__['devices'][-1]['zip_filename']}")
                 # Grab fp and sp from selected Factory zip
-                fingerprint, security_patch = url2fpsp(selected_url, "factory")
+                fingerprint, security_patch = url2fpsp(selected_url, "factory", state=state)
+                # Check if abort was triggered (but not if we got valid results - stop_event is set on success too)
+                if state and state.stop_event.is_set() and (not fingerprint or not security_patch):
+                    debug("Processing aborted by user in Factory")
+                    return -1
                 if fingerprint and security_patch:
                     model_list = []
                     product_list = []
@@ -4005,7 +4074,11 @@ def get_beta_pif(device_model='random', force_version=None):
                         break
             elif data in ['gsi', 'gsi_error'] and gsi_data:
                 print(f"  Extracting beta print from GSI data version {latest_version} ...")
-                fingerprint, security_patch = url2fpsp(gsi_data.__dict__['devices'][0]['url'], "gsi")
+                fingerprint, security_patch = url2fpsp(gsi_data.__dict__['devices'][0]['url'], "gsi", state=state)
+                # Check if abort was triggered (but not if we got valid results - stop_event is set on success too)
+                if state and state.stop_event.is_set() and (not fingerprint or not security_patch):
+                    debug("Processing aborted by user in GSI")
+                    return -1
                 incremental = gsi_data.__dict__['incremental']
                 expiry_date = gsi_data.__dict__['beta_expiry_date']
                 model_list = gsi_data.__dict__['model_list']
@@ -4054,7 +4127,6 @@ def get_beta_pif(device_model='random', force_version=None):
                         fingerprint = f"google/gsi_gms_arm64/gsi_arm64:{latest_version}/{build_id}/{incremental}:user/release-keys"
                     if fingerprint and security_patch:
                         break
-
 
     build_type = 'user'
     build_tags = 'release-keys'
@@ -4457,9 +4529,9 @@ def resolve_url_redirects(url, max_redirects=5):
 
 
 # ============================================================================
-#                Function get_fp_sp_from_incremental_remote_file
+#                Function get_fp_sp_from_ota_http_range
 # ============================================================================
-def get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size=8*1024*1024, overlap=200, fallback_size=60*1024*1024):
+def get_fp_sp_from_ota_http_range(url, state=None, chunk_size=8*1024*1024, overlap=200):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
@@ -4473,26 +4545,18 @@ def get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size=8*1024*10
             fingerprint = None
             security_patch = None
 
-            # Set up regex patterns based on image type, note: we won't be using the partial patterns here for now.
-            if image_type == 'ota':
-                fp_pattern_complete = r"post-build=(.+?)(\s|$)"
-                fp_pattern_partial = r"post-build=([^\s]*?)$"
-                sp_pattern_complete = r"security-patch-level=(.+?)(\s|$)"
-                sp_pattern_partial = r"security-patch-level=([^\s]*?)$"
-            elif image_type == 'factory':
-                fp_pattern_complete = r"com\.android\.build\.boot\.fingerprint(.+?)\x00"
-                fp_pattern_partial = r"com\.android\.build\.boot\.fingerprint([^\x00]*?)$"
-                sp_pattern_complete = r"com\.android\.build\.boot\.security_patch(.+?)\x00"
-                sp_pattern_partial = r"com\.android\.build\.boot\.security_patch([^\x00]*?)$"
-            else:
-                print(f"Unsupported image type for incremental reading: {image_type}")
-                return None, None
+            # Set up regex patterns for OTA
+            fp_pattern_complete = r"post-build=(.+?)(\s|$)"
+            sp_pattern_complete = r"security-patch-level=(.+?)(\s|$)"
 
-            # First, try partial content requests (assume the server supports it)
-            supports_partial_content = True
-            debug(f"Starting chunked download with chunk_size=0x{chunk_size:x}, overlap=0x{overlap:x}")
+            debug(f"Starting OTA chunked download with chunk_size=0x{chunk_size:x}, overlap=0x{overlap:x}")
             i = 0
             while fingerprint is None or security_patch is None:
+                # Check if abort was triggered
+                if state and state.stop_event.is_set():
+                    debug("OTA processing aborted by user")
+                    return None, None
+
                 # Calculate start and end ranges with overlap
                 start_range = i * chunk_size
                 end_range = ((i + 1) * chunk_size) + overlap
@@ -4549,64 +4613,17 @@ def get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size=8*1024*10
 
                         i += 1
                     else:
-                        print(f"⚠️ Server doesn't support partial content, status: {response.status_code}")
-                        supports_partial_content = False
-                        break
-                except Exception as e:
-                    print(f"⚠️ Error fetching chunk: {str(e)}")
-                    # Try to continue with the next chunk
-                    i += 1
-                    # If we've gone too far, break out
-                    if i * chunk_size >= total_size:
-                        print("⚠️ Reached end of file or encountered too many errors, stopping chunked download")
+                        debug(f"Server returned status {response.status_code}, cannot use partial content")
                         break
 
-            # If we couldn't find the patterns with partial content,
-            # or server doesn't support it, try a single larger request as fallback
-            if not supports_partial_content or (fingerprint is None or security_patch is None):
-                print(f"⚠️ Using fallback method: requesting file directly. This might take a while for large files...")
-                try:
-                    # For OTA files, limit to first few MB since metadata is usually at the beginning
-                    if image_type == 'ota':
-                        fallback_size = min(5*1024*1024, total_size)  # 5MB for OTA
-                        debug(f"Downloading first {fallback_size // (1024*1024)}MB of OTA file...")
-                        headers = {"Accept-Encoding": "identity"}  # Disable compression
-                        response = requests.get(url, headers=headers, stream=True, verify=False, timeout=60)
-                        content = response.raw.read(fallback_size).decode('utf-8', errors='ignore')
-                    else:
-                        # For factory images, we might need to download a larger portion
-                        fallback_size = min(fallback_size, total_size)  # 60MB for factory images
-                        debug(f"Downloading first {fallback_size // (1024*1024)}MB of file...")
-                        headers = {"Accept-Encoding": "identity"}  # Disable compression
-                        response = requests.get(url, headers=headers, stream=True, verify=False, timeout=90)
-                        content = response.raw.read(fallback_size).decode('utf-8', errors='ignore')
-
-                    # Search for patterns in the fallback content
-                    if fingerprint is None:
-                        fp_match = re.search(fp_pattern_complete, content)
-                        if fp_match:
-                            fingerprint = fp_match.group(1).strip('\x00')
-                            debug(f"Found fingerprint: {fingerprint}")
-                            wx.Yield()
-
-                    if security_patch is None:
-                        sp_match = re.search(sp_pattern_complete, content)
-                        if sp_match:
-                            security_patch = sp_match.group(1).strip('\x00')
-                            debug(f"Found security patch: {security_patch}")
-                            wx.Yield()
-
                 except Exception as e:
-                    print(f"⚠️ Fallback request failed: {str(e)}")
-
-                # If fallback approach failed and we still don't have the data,
-                if fingerprint is None or security_patch is None:
-                    print(f"⚠️ Could not extract required information from partial download.")
+                    debug(f"Error fetching range {start_range}-{end_range}: {e}")
+                    break
 
             return fingerprint, security_patch
 
     except Exception as e:
-        print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error in get_fp_sp_from_incremental_remote_file")
+        print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error in get_fp_sp_from_ota_http_range function")
         traceback.print_exc()
         return None, None
 
@@ -4614,7 +4631,7 @@ def get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size=8*1024*10
 # ============================================================================
 #                               Function url2fpsp
 # ============================================================================
-def url2fpsp(url, image_type, override_size_limit=None):
+def url2fpsp(url, image_type, override_size_limit=None, state=None):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
@@ -4622,14 +4639,15 @@ def url2fpsp(url, image_type, override_size_limit=None):
             fingerprint = None
             security_patch = None
 
-            # For OTA and factory images, use incremental chunk fetching
+            # For OTA images, use HTTP Range requests (more efficient for smaller files)
             if image_type == 'ota':
-                chunk_size = override_size_limit if override_size_limit is not None else 2*1024
-                fingerprint, security_patch = get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size)
-
-            elif image_type == 'factory':
                 chunk_size = override_size_limit if override_size_limit is not None else 8*1024*1024
-                fingerprint, security_patch = get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size)
+                fingerprint, security_patch = get_fp_sp_from_ota_http_range(url, state=state, chunk_size=chunk_size)
+
+            # For factory images, use streaming download
+            elif image_type == 'factory':
+                chunk_size = override_size_limit if override_size_limit is not None else None
+                fingerprint, security_patch = get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size, state=state)
 
             elif image_type == 'gsi':
                 response = requests.head(url)
@@ -4677,6 +4695,268 @@ def url2fpsp(url, image_type, override_size_limit=None):
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error in url2fpsp function")
         traceback.print_exc()
         return None, None
+
+
+# ============================================================================
+#                Function get_fp_sp_from_incremental_remote_file
+# ============================================================================
+def get_fp_sp_from_incremental_remote_file(url, image_type, chunk_size=None, overlap=None, fallback_size=60*1024*1024, state=None):
+    try:
+        # Use provided state or create new one
+        if state is None:
+            state = DownloadState()
+        config = get_config()
+
+        # Use config values if not provided
+        if chunk_size is None:
+            chunk_size = config.pif_chunk_size
+        if overlap is None:
+            overlap = config.pif_chunk_overlap
+
+        fingerprint = None
+        security_patch = None
+
+        # Set up regex patterns based on image type
+        if image_type == 'ota':
+            fp_pattern_complete = r"post-build=(.+?)(\s|$)"
+            sp_pattern_complete = r"security-patch-level=(.+?)(\s|$)"
+        elif image_type == 'factory':
+            fp_pattern_complete = r"com\.android\.build\.boot\.fingerprint(.+?)\x00"
+            sp_pattern_complete = r"com\.android\.build\.boot\.security_patch(.+?)\x00"
+        else:
+            print(f"Unsupported image type: {image_type}")
+            return None, None
+
+        # Extract filename from URL for temp file
+        filename = url.split('/')[-1]
+        if not filename:
+            filename = "downloaded_image.zip"
+        temp_file_path = os.path.join(tempfile.gettempdir(), filename)
+        debug(f"Streaming download to temp file: {temp_file_path}")
+
+        # Start download thread (daemon)
+        debug(f"Starting download thread")
+        download_t = threading.Thread(target=download_thread, args=(state, url, temp_file_path), daemon=True)
+        download_t.start()
+
+        # Processing in MAIN THREAD
+        i = 0
+        while not state.stop_event.is_set():
+            wx.Yield()
+            start_pos = i * chunk_size
+            end_pos = start_pos + chunk_size + overlap
+
+            # Wait for enough data to be downloaded
+            while state.downloaded_bytes < end_pos:
+                if state.download_complete:
+                    break
+                if state.stop_event.is_set():
+                    break
+                # debug(f"Waiting for download... Downloaded {state.downloaded_bytes} bytes, need at least {end_pos} bytes")
+                time.sleep(0.1)
+
+            if state.stop_event.is_set():
+                break
+
+            # Check if we've processed everything
+            if state.download_complete and start_pos >= state.downloaded_bytes:
+                break
+
+            # Read chunk from file
+            try:
+                with open(temp_file_path, 'rb') as f:
+                    f.seek(start_pos)
+                    chunk_data = f.read(chunk_size + overlap)
+            except Exception as e:
+                debug(f"Error reading chunk: {e}")
+                time.sleep(0.1)
+                continue
+
+            if not chunk_data:
+                if state.download_complete:
+                    break
+                time.sleep(0.1)
+                continue
+
+            # Determine actual end position
+            actual_end = start_pos + len(chunk_data)
+
+            # Search in the chunk
+            content = chunk_data.decode('utf-8', errors='ignore')
+
+            # Search for fingerprint
+            if fingerprint is None:
+                fp_match = re.search(fp_pattern_complete, content)
+                if fp_match:
+                    fingerprint = fp_match.group(1).strip('\x00')
+                    state.fingerprint = fingerprint
+                    debug(f"Found fingerprint: {fingerprint}")
+
+            # Search for security patch
+            if security_patch is None:
+                sp_match = re.search(sp_pattern_complete, content)
+                if sp_match:
+                    security_patch = sp_match.group(1).strip('\x00')
+                    state.security_patch = security_patch
+                    debug(f"Found security patch: {security_patch}")
+
+            # Stop only if BOTH are found
+            if fingerprint and security_patch:
+                debug(f"Found both fingerprint and security patch, stopping")
+                state.stop_event.set()
+                break
+
+            # Progress reporting
+            if state.file_size > 0:
+                # Always show processing progress
+                percent = (actual_end * 100) // state.file_size
+                debug(f"Processing bytes 0x{start_pos:x} to 0x{actual_end:x} ({percent}%)")
+
+                # Show download progress only if not 100% complete
+                if state.downloaded_bytes < state.file_size:
+                    percent_dl = (state.downloaded_bytes * 100) // state.file_size
+                    debug(f"Downloaded {state.downloaded_bytes}/{state.file_size} bytes ({percent_dl}%)")
+            else:
+                debug(f"Processing bytes 0x{start_pos:x} to 0x{actual_end:x}")
+
+            i += 1
+
+        # Wait for download thread to finish
+        download_t.join(timeout=5)
+
+        # If found, return (delete temp file on early exit)
+        if fingerprint and security_patch:
+            debug(f"Found fingerprint: {fingerprint}, security_patch: {security_patch}")
+            try:
+                os.remove(temp_file_path)
+                debug(f"Deleted temp file after early exit")
+            except Exception as e:
+                debug(f"Failed to delete temp file: {e}")
+            return fingerprint, security_patch
+
+        # If not found after processing all chunks, try fallback
+        if fingerprint is None or security_patch is None:
+            # Check if we were aborted
+            if state.stop_event.is_set():
+                debug("Processing aborted by user, skipping fallback")
+                return None, None
+
+            # Check if download is complete before attempting fallback
+            if not state.download_complete:
+                debug(f"Download incomplete ({state.downloaded_bytes}/{state.file_size} bytes), cannot use fallback")
+                return None, None
+
+            if os.path.exists(temp_file_path):
+                debug(f"Processing full file with get_pif_from_image: {temp_file_path}")
+                try:
+                    props_dir = get_pif_from_image(temp_file_path)
+                    if props_dir and os.path.exists(props_dir):
+                        # Read prop files from the props directory
+                        prop_files = [os.path.join(props_dir, f) for f in os.listdir(props_dir) if os.path.isfile(os.path.join(props_dir, f))]
+                        if prop_files:
+                            # Parse prop files into a dictionary
+                            processed_dict = {}
+                            for pathname in prop_files:
+                                with open(pathname, 'r', encoding='ISO-8859-1', errors="replace") as f:
+                                    content = f.readlines()
+                                contentList = [x.strip().split('#')[0].split('=', 1) for x in content if '=' in x.split('#')[0]]
+                                contentDict = dict(contentList)
+                                processed_dict.update(contentDict)
+
+                            # Extract fingerprint
+                            if fingerprint is None:
+                                fp_keys = ['ro.build.fingerprint', 'ro.system.build.fingerprint', 'ro.product.build.fingerprint', 'ro.vendor.build.fingerprint']
+                                for key in fp_keys:
+                                    if key in processed_dict:
+                                        fingerprint = processed_dict[key]
+                                        debug(f"Found fingerprint from build.prop: {fingerprint}")
+                                        break
+
+                            # Extract security_patch
+                            if security_patch is None:
+                                sp_keys = ['ro.build.version.security_patch', 'ro.system.build.version.security_patch', 'ro.vendor.build.version.security_patch']
+                                for key in sp_keys:
+                                    if key in processed_dict:
+                                        security_patch = processed_dict[key]
+                                        debug(f"Found security_patch from build.prop: {security_patch}")
+                                        break
+
+                            if fingerprint and security_patch:
+                                debug(f"Successfully extracted from full file processing")
+                                # Keep temp file for debugging
+                                return fingerprint, security_patch
+                except Exception as e:
+                    debug(f"Error processing with get_pif_from_image: {e}")
+
+        # If still not found
+        if fingerprint is None or security_patch is None:
+            print(f"⚠️ Could not extract required information.")
+
+        # Clean up temp file if it still exists
+        if os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                debug(f"Deleted temp file: {temp_file_path}")
+            except Exception as e:
+                debug(f"Failed to delete temp file: {e}")
+
+        return fingerprint, security_patch
+
+    except Exception as e:
+        print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error in get_fp_sp_from_incremental_remote_file")
+        traceback.print_exc()
+        # Clean up temp file on exception
+        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                debug(f"Deleted temp file after exception: {temp_file_path}")
+            except Exception:
+                pass
+        return None, None
+
+
+# ============================================================================
+#                Function download_thread
+# ============================================================================
+def download_thread(state, url, temp_file_path):
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+
+            # Get file size first
+            response_head = requests.head(url, verify=False, timeout=30)
+            state.file_size = int(response_head.headers.get('Content-Length', 0))
+            debug(f"File size: {state.file_size} bytes")
+
+            # Open temp file for writing
+            temp_file = open(temp_file_path, 'wb')
+
+            # Stream download
+            headers = {"Accept-Encoding": "identity"}
+            response = requests.get(url, headers=headers, stream=True, verify=False, timeout=60)
+
+            try:
+                while not state.stop_event.is_set():
+                    data = response.raw.read(8192)
+
+                    if not data:
+                        # Check if we've reached end of stream
+                        time.sleep(0.1)
+                        data = response.raw.read(8192)
+                        if not data:
+                            break
+
+                    temp_file.write(data)
+                    state.downloaded_bytes += len(data)
+
+            finally:
+                temp_file.close()
+                state.download_complete = True
+                debug(f"Download thread complete: {state.downloaded_bytes} bytes")
+
+    except Exception as e:
+        debug(f"Download thread error: {e}")
+        state.download_complete = True
 
 
 # ============================================================================
@@ -6492,7 +6772,7 @@ def bootloader_issue_message():
 # ============================================================================
 #                 Function download_ksu_latest_release_asset
 # ============================================================================
-def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=True, custom_kernel=None, include_prerelease = False, latest_any=False, version_choice=False, get_all=False):
+def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=True, custom_kernel=None, include_prerelease = False, latest_any=False, version_choice=False, get_all=False, search_all_releases=False):
     try:
         # For ShirkNeko and other custom kernels that might use pre-releases, check pre-releases first
         include_prerelease = custom_kernel in ['ShirkNeko', 'MiRinFork', 'WildKernels']
@@ -6674,9 +6954,55 @@ def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=Tru
             download_file(best_match['browser_download_url'])
             print(f"Downloaded {best_match['name']}")
             return best_match['name']
-        else:
+
+        should_search = search_all_releases
+        if not should_search:
             print(f"⚠️ Automatic good match for asset {asset_name} not found in the latest release of {user}/{repo}")
-            print("ℹ️ To see all available assets, enable the checkbox [Show all assets including non-matching ones] when selecting kernel flavor.\n")
+            prompt_msg = f"The asset '{asset_name}' was not found in the latest release of {user}/{repo}.\n\nWould you like to search in older releases?"
+            response = wx.MessageBox(prompt_msg, "Asset Not Found", wx.YES_NO | wx.ICON_QUESTION)
+            should_search = (response == wx.YES)
+
+        if should_search:
+            print(f"ℹ️ Searching older releases...")
+            wx.Yield()
+            all_releases = get_gh_release_object(user=user, repo=repo, include_prerelease=include_prerelease, latest_any=latest_any, get_all_releases=True)
+            if all_releases:
+                for release in all_releases:
+                    release_tag = release.get('tag_name', 'unknown')
+                    release_assets = release.get('assets', [])
+                    for asset in release_assets:
+                        match = pattern.match(asset['name'])
+                        if match:
+                            asset_version = 0
+                            if len(match.groups()) > 0:
+                                asset_version = int(match[1])
+                            if asset_version <= variable_version and asset_version > best_version:
+                                best_match = asset
+                                best_version = asset_version
+                                matched_release_tag = release_tag
+                            elif asset_version > variable_version and asset_version < fallback_version:
+                                fallback_match = asset
+                                fallback_version = asset_version
+                                fallback_release_tag = release_tag
+                    if best_match:
+                        break
+                if best_match:
+                    print(f"ℹ️ Found matching asset in release {matched_release_tag}: {best_match['name']}")
+                    download_file(best_match['browser_download_url'])
+                    print(f"Downloaded {best_match['name']}")
+                    return best_match['name']
+                elif fallback_match:
+                    print(f"ℹ️ Found asset in release {fallback_release_tag} (closest higher version): {fallback_match['name']}")
+                    download_file(fallback_match['browser_download_url'])
+                    print(f"Downloaded {fallback_match['name']}")
+                    return fallback_match['name']
+                else:
+                    print(f"⚠️ No matching asset found in any release for {asset_name}")
+            else:
+                print(f"⚠️ No releases found to search")
+
+        if not should_search or not best_match:
+            print("ℹ️ To see all available assets, enable the checkbox [Search older releases if asset not found in latest] when selecting kernel flavor.\n")
     except Exception as e:
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error in download_ksu_latest_release_asset function")
         traceback.print_exc()
@@ -6901,9 +7227,9 @@ def get_gh_latest_release_version(user, repo, include_prerelease=False):
 # ============================================================================
 #                   Function get_gh_release_object
 # ============================================================================
-def get_gh_release_object(user, repo, include_prerelease=False, latest_any=False):
+def get_gh_release_object(user, repo, include_prerelease=False, latest_any=False, get_all_releases=False):
     try:
-        # Get all releases
+        # Get everything about releases
         url = f"https://api.github.com/repos/{user}/{repo}/releases"
         response = request_with_fallback(method='GET', url=url)
         if response.status_code != 200:
@@ -6919,6 +7245,9 @@ def get_gh_release_object(user, repo, include_prerelease=False, latest_any=False
             filtered_releases = [release for release in releases if not release['prerelease']]
         else:
             filtered_releases = [release for release in releases if release['prerelease']]
+
+        if get_all_releases:
+            return filtered_releases
 
         # Get the latest release
         latest_release = filtered_releases[0] if filtered_releases else None

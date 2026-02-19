@@ -43,6 +43,7 @@ import json
 from datetime import datetime
 from urllib.parse import urlparse
 from packaging.version import parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from constants import *
 from runtime import *
@@ -186,8 +187,21 @@ class Device():
         self._tmp_readable = None
         self._partitions = None
         self.bootdevice_string = None
-        # Get vbmeta details
-        self.vbmeta = self.get_vbmeta_details()
+        # vbmeta details are lazy loaded
+        self._vbmeta = None
+
+    # ----------------------------------------------------------------------------
+    #                               property vbmeta
+    # ----------------------------------------------------------------------------
+    @property
+    def vbmeta(self):
+        if self._vbmeta is None:
+            self._vbmeta = self.get_vbmeta_details()
+        return self._vbmeta
+
+    @vbmeta.setter
+    def vbmeta(self, value):
+        self._vbmeta = value
 
     # ----------------------------------------------------------------------------
     #                               property adb_device_info
@@ -349,13 +363,13 @@ class Device():
                     theCmd = f"\"{get_adb()}\" -s {self.id} shell \"su -c \'/bin/getprop\'\""
                 else:
                     theCmd = f"\"{get_adb()}\" -s {self.id} shell /bin/getprop"
-                res = run_shell(theCmd)
+                res = run_shell(theCmd, timeout=10)
                 if res and isinstance(res, subprocess.CompletedProcess) and res.returncode == 127 or "/system/bin/sh: /bin/getprop: not found" in res.stdout:
                     if self.rooted:
                         theCmd = f"\"{get_adb()}\" -s {self.id} shell \"su -c \'getprop\'\""
                     else:
                         theCmd = f"\"{get_adb()}\" -s {self.id} shell getprop"
-                    res = run_shell(theCmd)
+                    res = run_shell(theCmd, timeout=10)
                 return ''.join(res.stdout)
             else:
                 print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: adb command is not found!")
@@ -1126,7 +1140,7 @@ class Device():
                         return -1
 
             try:
-                res = run_shell(theCmd)
+                res = run_shell(theCmd, timeout=5)
                 if res and isinstance(res, subprocess.CompletedProcess) and res.returncode == 0:
                     list = res.stdout.split('\n')
                 else:
@@ -1251,7 +1265,9 @@ class Device():
         if self.true_mode != 'adb' or not self.rooted:
             return None
         try:
-            self.vbmeta.clear()
+            # Use _vbmeta directly to avoid recursion through the property
+            if self._vbmeta:
+                self._vbmeta.clear()
             vbmeta_a = ''
             vbmeta_b = ''
             vbmeta_a_only = ''
@@ -2119,7 +2135,7 @@ add_hosts_module
             else:
                 debug(f"Checking for {file_path} on the device ...")
                 theCmd = f"\"{get_adb()}\" -s {self.id} shell ls \"{file_path}\""
-            res = run_shell(theCmd)
+            res = run_shell(theCmd, timeout=3)
             if res and isinstance(res, subprocess.CompletedProcess):
                 # don't output debug when checking partitions as it's too verbose
                 if not '/dev/block/' in file_path:
@@ -3546,11 +3562,11 @@ add_hosts_module
         if self._rooted is None and self.true_mode == 'adb':
             if get_adb():
                 theCmd = f"\"{get_adb()}\" -s {self.id} shell \"su -c 'ls -l /data/adb/'\""
-                res = run_shell(theCmd, timeout=8)
+                res = run_shell(theCmd, timeout=2)
                 if res and isinstance(res, subprocess.CompletedProcess) and res.returncode == 0 and '/system/bin/sh: su: not found' not in res.stdout:
                     self._rooted = True
                     theCmd = f"\"{get_adb()}\" -s {self.id} shell su --version"
-                    res = run_shell(theCmd, timeout=8)
+                    res = run_shell(theCmd, timeout=2)
                     if res and isinstance(res, subprocess.CompletedProcess) and res.returncode == 0:
                         self._su_version = res.stdout
                 else:
@@ -3574,7 +3590,7 @@ add_hosts_module
         if self._tmp_readable is None and self.true_mode == 'adb':
             if get_adb():
                 theCmd = f"\"{get_adb()}\" -s {self.id} shell ls -l /data/local/tmp/"
-                res = run_shell(theCmd, timeout=8)
+                res = run_shell(theCmd, timeout=2)
                 if res and isinstance(res, subprocess.CompletedProcess):
                     if 'Permission denied' in f"{res.stdout} {res.stderr}" or res.returncode == 1:
                         self._tmp_readable = False
@@ -5384,18 +5400,52 @@ def update_phones(device_id, mode=None):
 
 
 # ============================================================================
+#                               Function _init_device_parallel
+# Initialize a single device in parallel.
+# Returns (device_details, device, device_id) or None on error.
+# ============================================================================
+def _init_device_parallel(device_info):
+    d_id, mode, true_mode, device_type = device_info
+    try:
+        dev_init_start = time.time()
+        if device_type == 'adb':
+            device = Device(d_id, 'adb', true_mode)
+            device.init('adb')
+        else:  # fastboot
+            device = Device(d_id, 'f.b')
+            device.init('f.b')
+        device_details = device.get_device_details()
+        dev_init_duration = time.time() - dev_init_start
+
+        # Extract device name and hardware for devices.json
+        device_name = getattr(device, 'hardware', '') or ''
+        hardware = getattr(device, 'hardware', '') or ''
+
+        return (device_details, device, d_id, device_name, hardware, dev_init_duration)
+    except Exception as e:
+        print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Error initializing device {d_id}: {e}")
+        traceback.print_exc()
+        return None
+
+# ============================================================================
 #                               Function get_connected_devices
 # ============================================================================
 def get_connected_devices(respect_device_filter=True, scan_all=False):
     devices = []
     phones = []
     all_detected_device_ids = []
+    devices_to_init = []  # List of (d_id, mode, true_mode, device_type) tuples
+    scan_start = time.time()
+    device_init_times = []
 
     try:
         if get_adb():
             theCmd = f"\"{get_adb()}\" devices"
             debug(theCmd)
+            adb_start = time.time()
             res = run_shell(theCmd, timeout=60)
+            adb_duration = time.time() - adb_start
+            debug(f"ADB devices command took {adb_duration:.2f}s")
             if res and isinstance(res, subprocess.CompletedProcess):
                 debug(f"Return Code: {res.returncode}")
                 debug(f"Stdout: {res.stdout}")
@@ -5405,7 +5455,6 @@ def get_connected_devices(respect_device_filter=True, scan_all=False):
                         if any(keyword in device for keyword in ['device', 'recovery', 'sideload', 'rescue']):
                             if device == "List of devices attached":
                                 continue
-                            # with contextlib.suppress(Exception):
                             try:
                                 d_id = device.split("\t")
                                 if len(d_id) != 2:
@@ -5417,7 +5466,6 @@ def get_connected_devices(respect_device_filter=True, scan_all=False):
                                 all_detected_device_ids.append(d_id)
 
                                 # Add/update device in devices.json FIRST (before filtering)
-                                # This ensures all detected devices are tracked
                                 add_or_update_device(d_id, '', '', connected=True)
 
                                 # Check if device is enabled (unless scan_all is True)
@@ -5428,21 +5476,11 @@ def get_connected_devices(respect_device_filter=True, scan_all=False):
                                 true_mode = None
                                 if mode in ('recovery', 'sideload', 'rescue'):
                                     true_mode = mode
-                                device = Device(d_id, 'adb', true_mode)
-                                device.init('adb')
-                                device_details = device.get_device_details()
 
-                                # Extract device name and hardware for devices.json
-                                device_name = getattr(device, 'hardware', '') or ''
-                                hardware = getattr(device, 'hardware', '') or ''
-
-                                # Update device in devices.json
-                                add_or_update_device(d_id, device_name, hardware, connected=True)
-
-                                devices.append(device_details)
-                                phones.append(device)
+                                # Queue device for parallel initialization
+                                devices_to_init.append((d_id, mode, true_mode, 'adb'))
                             except Exception as e:
-                                print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while getting adb devices.")
+                                print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Error processing ADB device.")
                                 traceback.print_exc()
                     else:
                         if device.strip() != "":
@@ -5476,7 +5514,6 @@ def get_connected_devices(respect_device_filter=True, scan_all=False):
                                 all_detected_device_ids.append(d_id)
 
                                 # Add/update device in devices.json FIRST (before filtering)
-                                # This ensures all detected devices are tracked
                                 add_or_update_device(d_id, '', '', connected=True)
 
                                 # Check if device is enabled (unless scan_all is True)
@@ -5484,29 +5521,52 @@ def get_connected_devices(respect_device_filter=True, scan_all=False):
                                     print(f"Device {d_id} is disabled, skipping...")
                                     continue
 
-                                device = Device(d_id, 'f.b')
-                                device.init('f.b')
-                                device_details = device.get_device_details()
-
-                                # Extract device name and hardware for devices.json
-                                device_name = getattr(device, 'hardware', '') or ''
-                                hardware = getattr(device, 'hardware', '') or ''
-
-                                # Update device in devices.json
-                                add_or_update_device(d_id, device_name, hardware, connected=True)
-
-                                devices.append(device_details)
-                                phones.append(device)
+                                # Queue device for parallel initialization
+                                devices_to_init.append((d_id, 'fastboot', None, 'fastboot'))
                         except Exception as e:
-                            print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while getting fastboot devices.")
+                            print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Error processing fastboot device.")
                             traceback.print_exc()
         else:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while getting fastboot devices.")
+
+        # Initialize devices in parallel using ThreadPoolExecutor
+        if devices_to_init:
+            parallel_start = time.time()
+            print(f"Initializing {len(devices_to_init)} device(s) in parallel...")
+            with ThreadPoolExecutor(max_workers=min(len(devices_to_init), 4)) as executor:
+                future_to_device = {
+                    executor.submit(_init_device_parallel, device_info): device_info for device_info in devices_to_init
+                }
+
+                for future in as_completed(future_to_device):
+                    result = future.result()
+                    if result:
+                        device_details, device, d_id, device_name, hardware, duration = result
+                        devices.append(device_details)
+                        phones.append(device)
+                        device_init_times.append((d_id, duration))
+                        debug(f"Device {d_id} initialization took {duration:.2f}s")
+
+                        # Update device in devices.json
+                        add_or_update_device(d_id, device_name, hardware, connected=True)
+
+            parallel_duration = time.time() - parallel_start
+            print(f"Parallel device initialization completed in {parallel_duration:.2f}s")
 
         # Update connection status for all known devices
         update_all_devices_connection_status(all_detected_device_ids)
 
         set_phones(phones)
+
+        # Print timing summary
+        scan_duration = time.time() - scan_start
+        print(f"Device scan completed in {scan_duration:.2f}s")
+        if device_init_times:
+            total_init_time = sum(t[1] for t in device_init_times)
+            avg_init_time = total_init_time / len(device_init_times)
+            print(f"  Total device initialization: {total_init_time:.2f}s (avg: {avg_init_time:.2f}s per device)")
+            for d_id, duration in device_init_times:
+                print(f"    {d_id}: {duration:.2f}s")
     except Exception as e:
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while getting connected devices.")
         traceback.print_exc()

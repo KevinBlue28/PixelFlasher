@@ -93,6 +93,7 @@ class PifManager(wx.Dialog):
         self.beta_pif_version = 'latest'
         self._tf_targets_loaded = False
         self._validation_timer = None  # Timer for debounced validation
+        self.download_state = None     # For aborting download/processing
 
         # Active pif label
         self.active_pif_label = wx.StaticText(parent=self, id=wx.ID_ANY, label=_("Active Pif"))
@@ -340,7 +341,7 @@ class PifManager(wx.Dialog):
         self.rb_latest.SetValue(True)
 
         # Custom version input
-        self.custom_version = wx.TextCtrl(self, wx.ID_ANY, "15", size=(75, -1))
+        self.custom_version = wx.TextCtrl(self, wx.ID_ANY, "17", size=(75, -1))
         self.custom_version.SetToolTip(_("Set a valid Android version code."))
         # self.custom_version.SetToolTip(_("Set a valid two digit Android version code,\nor 'C' for Canary,\nor 'CANARY_rxx' for Canary release.\nExample: 15, 16, 17, C, CANARY_r01\nNote: The custom version is only used when 'Custom' is selected."))
         self.custom_version.Enable(False)
@@ -1207,6 +1208,17 @@ class PifManager(wx.Dialog):
     # -----------------------------------------------
     def onClose(self, e):
         try:
+            # Abort any active download/processing
+            if self.download_state is not None:
+                self.download_state.stop_event.set()
+                self.download_state = None
+
+            # Stop the spinner to prevent errors in finally blocks
+            try:
+                self._on_spin('stop')
+            except:
+                pass  # Ignore if already destroyed or other errors
+
             # Clean up the validation timer
             if self._validation_timer is not None:
                 self._validation_timer.Stop()
@@ -1794,8 +1806,8 @@ class PifManager(wx.Dialog):
                 device_model = "all"
             elif wx.GetKeyState(wx.WXK_CONTROL):
                 device_model = "_select_"
-            elif device:
-                device_model = device.hardware
+            # elif device:
+            #     device_model = device.hardware
             else:
                 # device_model = "Random"
                 device_model = "_select_"
@@ -1848,20 +1860,49 @@ class PifManager(wx.Dialog):
                 if self.rb_custom.GetValue():
                     print(f"⚠️ WARNING! The requested Android beta / canary version is not valid: {self.beta_pif_version}. Using latest version instead.")
 
-            beta_pif = get_beta_pif(device_model, force_version)
-            if beta_pif == -1:
-                wx.CallAfter(self.console_stc.SetValue, _("Failed to get beta print."))
+            # Create download state for potential abort
+            self.download_state = DownloadState()
+
+            beta_pif = get_beta_pif(device_model, force_version, state=self.download_state)
+
+            # Check if window is still valid before proceeding
+            if not self or not hasattr(self, 'console_stc') or not self.console_stc:
+                # Window was destroyed, just return
+                self.download_state = None
+                return
+
+            # Check if we got valid results
+            # Note: stop_event is set both on success (to stop download early) and on abort
+            # So we check if we actually got results, not just if stop_event is set
+            if beta_pif == -1 or beta_pif is None:
+                self.console_stc.SetValue(_("Failed to get beta print."))
+                self.download_state = None
                 return
             if self.pif_format == 'prop':
                 self.console_stc.SetValue(self.J2P(beta_pif))
             else:
                 self.console_stc.SetValue(beta_pif)
 
+            # Clear download state after successful completion
+            self.download_state = None
+
         except Exception:
+            # Check if abort was triggered before handling exception
+            if self.download_state and self.download_state.stop_event.is_set():
+                debug("Download/processing was aborted or window closed")
+                self.download_state = None
+                return
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Exception in onGetPixelBetaPif function")
             traceback.print_exc()
         finally:
-            self._on_spin('stop')
+            try:
+                if self and hasattr(self, '_on_spin'):
+                    self._on_spin('stop')
+            except Exception:
+                pass  # Ignore errors if self is already destroyed
+            # Clear download state
+            if hasattr(self, 'download_state'):
+                self.download_state = None
 
     # -----------------------------------------------
     #                  select_t_image
@@ -2048,14 +2089,27 @@ class PifManager(wx.Dialog):
                 print(f"⚠️ WARNING! No download URL available for {source_label} factory image selection.")
                 return False
 
-            fingerprint, security_patch = url2fpsp(image_url, "factory")
+            # Create download state for potential abort
+            self.download_state = DownloadState()
+
+            fingerprint, security_patch = url2fpsp(image_url, "factory", state=self.download_state)
             if fingerprint is None or security_patch is None:
+                # Check if window was closed (abort)
+                if self.download_state is None or self.download_state.stop_event.is_set():
+                    debug("Download/processing was aborted or window closed")
+                    return False
                 debug(f"Failed to get fingerprint and security patch from partial {image_url}\nTrying the full image ...")
                 override_size_limit = get_size_from_url(image_url)
                 if override_size_limit is not None:
+                    if self.download_state is None or self.download_state.stop_event.is_set():
+                        debug("Download/processing was aborted or window closed")
+                        return False
                     self.console_stc.SetValue(f"{self.console_stc.GetValue()}\n⚠️ Downloading full {source_label} factory image {override_size_limit} bytes ...\nThis may take quite a while ...")
                     wx.Yield()
-                    fingerprint, security_patch = url2fpsp(image_url, "factory", override_size_limit)
+                    fingerprint, security_patch = url2fpsp(image_url, "factory", override_size_limit, state=self.download_state)
+
+            # Clear download state after completion
+            self.download_state = None
 
             if fingerprint and security_patch:
                 print(f"Security Patch:           {security_patch}")

@@ -63,7 +63,7 @@ jobs:
     outputs:
       commit_sha: ${{ steps.get_sha.outputs.commit_sha }}
       build_windows: ${{ steps.check_artifacts.outputs.build_windows }}
-      build_windows_arm64: ${{ steps.check_artifacts.outputs.build_windows_arm64 }}
+      # build_windows_arm64: ${{ steps.check_artifacts.outputs.build_windows_arm64 }}
       build_ubuntu_22_04: ${{ steps.check_artifacts.outputs.build_ubuntu_22_04 }}
       build_ubuntu_24_04: ${{ steps.check_artifacts.outputs.build_ubuntu_24_04 }}
       build_mac: ${{ steps.check_artifacts.outputs.build_mac }}
@@ -93,7 +93,6 @@ jobs:
           # Define artifact names and their corresponding output variables
           declare -A ARTIFACTS=(
             ["PixelFlasher.exe Artifacts"]="build_windows"
-            ["PixelFlasher-ARM64.exe Artifacts"]="build_windows_arm64"
             ["PixelFlasher_Ubuntu_22_04 Artifacts"]="build_ubuntu_22_04"
             ["PixelFlasher_Ubuntu_24_04 Artifacts"]="build_ubuntu_24_04"
             ["PixelFlasher_MacOS.dmg Artifacts"]="build_mac"
@@ -187,11 +186,11 @@ jobs:
     uses: ./.github/workflows/windows.yml
     secrets: inherit
 
-  build_windows_arm64:
-    needs: check_artifacts
-    if: ${{ needs.check_artifacts.outputs.build_windows_arm64 == 'true' }}
-    uses: ./.github/workflows/windows-arm64.yml
-    secrets: inherit
+  # build_windows_arm64:
+  #   needs: check_artifacts
+  #   if: ${{ needs.check_artifacts.outputs.build_windows_arm64 == 'true' }}
+  #   uses: ./.github/workflows/windows-arm64.yml
+  #   secrets: inherit
 
   build_ubuntu_22_04:
     needs: check_artifacts
@@ -219,7 +218,7 @@ jobs:
 
   deploy:
     # Make deploy conditional on the check_artifacts job and all build jobs
-    needs: [check_artifacts, build_windows, build_windows_arm64, build_ubuntu_22_04, build_ubuntu_24_04, build_mac, build_appimage]
+    needs: [check_artifacts, build_windows, build_ubuntu_22_04, build_ubuntu_24_04, build_mac, build_appimage]
     # Run only on tag push or manual workflow run, and even if some builds are skipped
     if: always() && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
 
@@ -258,7 +257,6 @@ jobs:
           # List of required artifacts - must match those in check_artifacts job
           ARTIFACTS=(
             "PixelFlasher.exe Artifacts"
-            "PixelFlasher-ARM64.exe Artifacts"
             "PixelFlasher_Ubuntu_22_04 Artifacts"
             "PixelFlasher_Ubuntu_24_04 Artifacts"
             "PixelFlasher_MacOS.dmg Artifacts"
