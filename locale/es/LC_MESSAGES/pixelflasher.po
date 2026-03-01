@@ -3009,64 +3009,68 @@ msgstr "Editar script antes de continuar"
 # Download Progress Window
 ##############################################################################
 msgid "Downloading: %s"
-msgstr ""
+msgstr "Descargando: %s"
 
 ##############################################################################
 # File Editor Window
 ##############################################################################
 msgid "Open Shell"
-msgstr ""
+msgstr "Abrir Shell"
 
 msgid "Save and Continue"
-msgstr ""
+msgstr "Guardar y Continuar"
 
 msgid "Cancel and Abort"
-msgstr ""
+msgstr "Cancelar y Abort"
 
 msgid "Open Folder in working directory"
-msgstr ""
+msgstr "Abrir carpeta en el directorio de trabajo"
 
 msgid "Open command shell in working directory"
-msgstr ""
+msgstr "Abrir shell de comandos en el directorio de trabajo"
 
 msgid "Open Folder in working directory\nNote: PF_FILEMANAGER needs to be set."
-msgstr ""
+msgstr "Abrir carpeta en el directorio de trabajo\nNota: PF_FILEMANAGER debe estar configurado."
 
 msgid "Open Terminal shell in working directory"
-msgstr ""
+msgstr "Abrir shell de Terminal en el directorio de trabajo"
 
 msgid "Save the file and continue."
-msgstr ""
+msgstr "Guardar el archivo y continuar."
 
 msgid "Cancel and Abort."
-msgstr ""
+msgstr "Cancelar y abortar."
 
 ##############################################################################
 # Ksu Asset Selector
 ##############################################################################
 msgid "Filter:"
-msgstr ""
+msgstr "Filtro:"
 
 msgid "Search assets..."
-msgstr ""
+msgstr "Buscar activos..."
 
 msgid "Asset Name"
-msgstr ""
+msgstr "Nombre del activo"
 
 msgid "Size"
-msgstr ""
+msgstr "Tamaño"
 
 msgid "Suggested: %s"
-msgstr ""
+msgstr "Sugerido: %s"
 
 msgid "Please select an asset."
-msgstr ""
+msgstr "Por favor seleccione un activo."
 
 msgid "No Selection"
-msgstr ""
+msgstr "Sin selección"
 
 msgid "Select KSU Asset"
-msgstr ""
+msgstr "Seleccionar activo KSU"
 
 msgid "Select a KSU asset:"
-msgstr ""
+msgstr "Seleccionar un activo KSU:"
+
+msgid "All releases (including older ones)"
+msgstr "Todas las versiones (incluidas las anteriores)"
+

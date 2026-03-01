@@ -6772,31 +6772,69 @@ def bootloader_issue_message():
 # ============================================================================
 #                 Function download_ksu_latest_release_asset
 # ============================================================================
-def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=True, custom_kernel=None, include_prerelease = False, latest_any=False, version_choice=False, get_all=False, search_all_releases=False):
+def download_ksu_latest_release_asset(
+        user,
+        repo,
+        asset_name=None,
+        anykernel=True,
+        custom_kernel=None,
+        include_prerelease = False,
+        latest_any=False,
+        version_choice=False,
+        get_all=False,
+        all_releases=False
+    ):
     try:
-        # For ShirkNeko and other custom kernels that might use pre-releases, check pre-releases first
-        include_prerelease = custom_kernel in ['ShirkNeko', 'MiRinFork', 'WildKernels']
-
         if asset_name:
             look_for = asset_name
         else:
             look_for = "[all entries]"
 
-        debug(f"Fetching latest release from {user}/{repo} matching {look_for} (include_prerelease: {include_prerelease})...")
+        debug(f"Fetching release(s) from {user}/{repo} matching {look_for} (include_prerelease: {include_prerelease}, all_releases: {all_releases})...")
+        # debug(f"URL: https://api.github.com/repos/{user}/{repo}/releases")
+        debug(f"URL: https://github.com/{user}/{repo}/releases")
         wx.Yield()
-        response_data = get_gh_release_object(user=user, repo=repo, include_prerelease=include_prerelease, latest_any=latest_any)
-        if response_data is None:
-            print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Failed to fetch release data from {user}/{repo}")
-            return None
 
-        assets = response_data.get('assets', [])
+        if all_releases:
+            releases_data = get_gh_release_object(user=user, repo=repo, include_prerelease=include_prerelease, latest_any=latest_any, get_all_releases=True)
+            if not releases_data:
+                print(f"No releases found for {user}/{repo}")
+                return None
+        else:
+            response_data = get_gh_release_object(user=user, repo=repo, include_prerelease=include_prerelease, latest_any=latest_any)
+            if response_data is None:
+                # No releases found for selected type - prompt the user
+                release_type = "pre-releases" if include_prerelease else "releases"
+                prompt_msg = f"No {release_type} found for {user}/{repo}.\n\nWould you like to search in all releases (including older ones)?"
+                response = wx.MessageBox(prompt_msg, "No Releases Found", wx.YES_NO | wx.ICON_QUESTION)
+                if response == wx.YES:
+                    return download_ksu_latest_release_asset(
+                        user=user, repo=repo, asset_name=asset_name,
+                        anykernel=anykernel, custom_kernel=custom_kernel,
+                        include_prerelease=True, latest_any=True,
+                        version_choice=version_choice, get_all=get_all, all_releases=True
+                    )
+                print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Failed to fetch release data from {user}/{repo}")
+                return None
+            releases_data = [response_data]
+
+        assets_with_release = []
+        for release in releases_data:
+            release_tag = release.get('tag_name', 'unknown')
+            release_date = release.get('published_at', '')[:10] if release.get('published_at') else ''
+            for asset in release.get('assets', []):
+                asset_copy = asset.copy()
+                asset_copy['release_tag'] = release_tag
+                asset_copy['release_date'] = release_date
+                assets_with_release.append(asset_copy)
+
+        assets = assets_with_release
         if not asset_name:
             return assets
 
         # Split the asset_name into parts
         parts = asset_name.split('-')
         base_name = parts[0]
-        base_name = f"{base_name}"
         version_parts = parts[1].split('.')
         fixed_version = '.'.join(version_parts[:-1])
         variable_version = int(version_parts[-1])
@@ -6836,6 +6874,48 @@ def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=Tru
         if version_choice:
             selection_mode = 2  # Force user selectable mode
 
+        # ----------------------------------
+        # Sub Function  clean_version
+        # ----------------------------------
+        def clean_version(ver_str):
+            # Remove .zip extension and anything after underscore.
+            return ver_str.replace('.zip', '').split('_')[0]
+
+        # ----------------------------------
+        # Sub Function  extract_asset_info
+        # ----------------------------------
+        def extract_asset_info(asset_name, pattern_match, custom_kernel, get_all_flag):
+            """
+            Extract base_name, version, and major_minor from asset filename.
+            Returns: (version, base_name, major_minor)
+            """
+            try:
+                # Extract base_name and major.minor based on kernel type
+                if custom_kernel == "WildKernels":
+                    # 6.1.134-android14-... -> base_name at index 1, version at index 0
+                    asset_base_name = asset_name.split('-')[1]
+                    ver_str = clean_version(asset_name.split('-')[0])
+                elif custom_kernel in ["MiRinFork", 'ShirkNeko']:
+                    # android14-6.1.134-... -> base_name at index 0, version at index 1
+                    asset_base_name = asset_name.split('-')[0]
+                    ver_str = clean_version(asset_name.split('-')[1])
+                elif custom_kernel is None:
+                    # AnyKernel3-android14-6.1.134... -> base_name at index 1, version at index 2
+                    asset_base_name = asset_name.split('-')[1]
+                    parts = asset_name.split('-')
+                    ver_str = clean_version(parts[2] if len(parts) > 2 else '0')
+                else:
+                    return (0, '', '')
+
+                # Extract version and major.minor from version string
+                ver_parts = ver_str.split('.')
+                asset_version = int(ver_parts[-1]) if ver_parts else 0
+                asset_major_minor = f"{ver_parts[0]}.{ver_parts[1]}" if len(ver_parts) >= 2 else ''
+
+                return (asset_version, asset_base_name, asset_major_minor)
+            except (IndexError, ValueError):
+                return (0, '', '')
+
         best_match = None
         best_version = -1
         matching_assets = []
@@ -6850,18 +6930,18 @@ def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=Tru
         for asset in assets:
             match = pattern.match(asset['name'])
             if match:
-                # Handle case when get_all is True and pattern has no capture groups
-                if get_all and custom_kernel:
-                    # Default version for get_all mode
-                    asset_version = 0
-                elif len(match.groups()) > 0:
-                    asset_version = int(match[1])
-                else:
-                    asset_version = 0
+                asset_version, asset_base_name, asset_major_minor = extract_asset_info(
+                    asset['name'], match, custom_kernel, get_all
+                )
+
                 matching_assets.append((asset['name'], asset_version))
                 asset_info = {
                     'asset': asset,
-                    'version': asset_version
+                    'version': asset_version,
+                    'base_name': asset_base_name,
+                    'major_minor': asset_major_minor,
+                    'release_tag': asset.get('release_tag', 'unknown'),
+                    'release_date': asset.get('release_date', '')
                 }
                 all_matching_assets.append(asset_info)
 
@@ -6872,46 +6952,78 @@ def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=Tru
                     elif '-Bypass-' in asset['name']:
                         bypass_assets.append(asset_info)
 
-        # Create prioritized asset list: Normal first, then Bypass, then all others
-        prioritized_assets = normal_assets + bypass_assets + all_matching_assets
+        # Create prioritized asset list
+        if all_releases:
+            # When searching all releases, prioritize exact base_name AND major.minor match first, then by version
+            exact_base_name_matches = [a for a in all_matching_assets if a.get('base_name') == base_name and a.get('major_minor') == fixed_version]
+            other_matches = [a for a in all_matching_assets if not (a.get('base_name') == base_name and a.get('major_minor') == fixed_version)]
+            prioritized_assets = exact_base_name_matches + other_matches
+        else:
+            # Type priority: Normal first, then Bypass, then all others
+            prioritized_assets = normal_assets + bypass_assets + all_matching_assets
 
-        # Process assets in priority order
+        # Process assets in priority order - always prioritize exact base_name AND major.minor match
+        exact_base_name_matches = []
+        other_matches = []
         for asset_info in prioritized_assets:
             asset = asset_info['asset']
             asset_version = asset_info['version']
+            asset_base_name = asset_info.get('base_name', '')
+            asset_major_minor = asset_info.get('major_minor', '')
 
-            # First priority: find highest version <= requested version
-            if asset_version <= variable_version and asset_version > best_version:
-                best_match = asset
-                best_version = asset_version
-                if asset_version == variable_version and selection_mode == 0:
-                    break
+            # Must match both base_name (android14) AND major.minor (6.1)
+            is_exact_match = (asset_base_name == base_name and asset_major_minor == fixed_version)
 
-            # Fallback: track lowest version > requested version
-            elif asset_version > variable_version and asset_version < fallback_version:
-                fallback_match = asset
-                fallback_version = asset_version
+            if is_exact_match:
+                exact_base_name_matches.append(asset_info)
+                # Only consider exact base_name+major.minor matches for best_match
+                if asset_version <= variable_version and asset_version > best_version:
+                    best_match = asset
+                    best_version = asset_version
+                    if asset_version == variable_version and selection_mode == 0:
+                        pass  # Don't break yet, still need to collect all
+                elif asset_version > variable_version and asset_version < fallback_version:
+                    fallback_match = asset
+                    fallback_version = asset_version
+            else:
+                other_matches.append(asset_info)
 
         # Apply selection logic based on mode
         if selection_mode == 1:  # Highest Available
-            if all_matching_assets:
-                highest_asset = max(all_matching_assets, key=lambda x: x['version'])
+            if exact_base_name_matches:
+                highest_asset = max(exact_base_name_matches, key=lambda x: x['version'])
                 best_match = highest_asset['asset']
                 best_version = highest_asset['version']
                 print(f"ℹ️ Using highest available version: {best_version}")
         elif selection_mode == 2:  # User selectable
-            if all_matching_assets:
+            if exact_base_name_matches or other_matches:
                 try:
-                    # Sort assets by version (highest first) for better display
-                    sorted_assets = sorted(all_matching_assets, key=lambda x: x['version'], reverse=True)
-                    asset_list = [item['asset'] for item in sorted_assets]
+                    # Sort: exact base_name matches first (by version descending, then by release tag for same version)
+                    # Use release_tag as secondary sort to prefer newer releases
+                    sorted_exact = sorted(exact_base_name_matches, key=lambda x: (x['version'], x.get('release_tag', '')), reverse=True)
+                    sorted_other = sorted(other_matches, key=lambda x: (x['version'], x.get('release_tag', '')), reverse=True)
+                    sorted_assets = sorted_exact + sorted_other
 
-                    # Determine suggested asset (current logic)
-                    suggested_asset = best_match if best_match else fallback_match
+                    # Determine suggested asset - ONLY from exact base_name matches
+                    if best_match:
+                        # Find the matching asset_info from sorted_assets to get full info
+                        suggested_asset = None
+                        for item in sorted_assets:
+                            if item['asset']['name'] == best_match.get('name', best_match.get('browser_download_url', '').split('/')[-1]):
+                                suggested_asset = item['asset']
+                                break
+                        if suggested_asset is None:
+                            suggested_asset = best_match
+                    elif fallback_match:
+                        suggested_asset = fallback_match
+                    else:
+                        suggested_asset = None
 
+                    debug(f"Suggested asset for user selection: {suggested_asset['name'] if suggested_asset else 'None'} (version: {best_version if best_match else 'N/A'})")
+                    wx.Yield()
                     selected_asset = show_ksu_asset_selector(
                         parent=None,
-                        assets=asset_list,
+                        assets=[item['asset'] for item in sorted_assets],
                         title="Select KernelSU Asset",
                         message=f"Multiple KernelSU assets found for {base_name}-{fixed_version}.x\nRequested version: {variable_version}",
                         suggested_asset=suggested_asset,
@@ -6920,13 +7032,10 @@ def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=Tru
 
                     if selected_asset:
                         best_match = selected_asset
-                        # Extract version from selected asset
-                        match = pattern.match(selected_asset['name'])
-                        if match:
-                            if len(match.groups()) > 0:
-                                best_version = int(match[1])
-                            else:
-                                best_version = 0
+                        selected_version, _, _ = extract_asset_info(
+                            selected_asset['name'], pattern, custom_kernel, get_all
+                        )
+                        best_version = selected_version
                         print(f"ℹ️ User selected version: {best_version}")
                     else:
                         print("ℹ️ User cancelled selection, using suggested asset, aborting ...")
@@ -6943,66 +7052,57 @@ def download_ksu_latest_release_asset(user, repo, asset_name=None, anykernel=Tru
                 best_version = fallback_version
                 print(f"⚠️ No version <= {variable_version} found, using closest higher version: {fallback_version}")
 
-        if matching_assets:
-            print(f"Assets matched {len(matching_assets)} assets:")
-            for name, version in matching_assets:
-                print(f"  - {name} (version: {version})")
+        # Debug: Show all assets being considered for suggestion
+        if exact_base_name_matches:
+            print(f"Exact matches for '{base_name}' '{fixed_version}': {len(exact_base_name_matches)} assets")
+            for a in exact_base_name_matches:
+                debug(f"  - {a['asset']['name']} (release: {a.get('release_tag', 'unknown')} {a.get('release_date', 'unknown')})")
+                wx.Yield()
+        elif other_matches:
+            print(f"Other base_name matches (different major.minor): {len(other_matches)} assets")
+            for a in other_matches[:5]:  # Show first 5
+                debug(f"  - {a['asset']['name']} (release: {a.get('release_tag', 'unknown')} {a.get('release_date', 'unknown')})")
                 wx.Yield()
 
+
         if best_match:
-            print(f"Selected best match KernelSU: {best_match['name']}")
+            print(f"ℹ️ Best Match: {best_match['name']} (release: {best_match.get('release_tag', 'unknown')} {best_match.get('release_date', '')})")
+        elif fallback_match:
+            print(f"ℹ️ fallback_match: {fallback_match['name']} (release: {fallback_match.get('release_tag', 'unknown')} {fallback_match.get('release_date', '')})")
+        wx.Yield()
+
+        if all_matching_assets:
+            print(f"Assets found {len(all_matching_assets)} assets:")
+            # for asset_info in all_matching_assets:
+            #     name = asset_info['asset']['name']
+            #     release_tag = asset_info.get('release_tag', 'unknown')
+            #     release_date = asset_info.get('release_date', '')
+            #     debug(f"  - {name} (release: {release_tag} {release_date})")
+            #     wx.Yield()
+
+        if best_match:
+            if all_releases:
+                print(f"ℹ️ Found matching asset: {best_match['name']}")
+            else:
+                print(f"Selected best match KernelSU: {best_match['name']}")
             download_file(best_match['browser_download_url'])
             print(f"Downloaded {best_match['name']}")
             return best_match['name']
 
-        should_search = search_all_releases
-        if not should_search:
+        if not all_releases:
             print(f"⚠️ Automatic good match for asset {asset_name} not found in the latest release of {user}/{repo}")
             prompt_msg = f"The asset '{asset_name}' was not found in the latest release of {user}/{repo}.\n\nWould you like to search in older releases?"
             response = wx.MessageBox(prompt_msg, "Asset Not Found", wx.YES_NO | wx.ICON_QUESTION)
-            should_search = (response == wx.YES)
-
-        if should_search:
-            print(f"ℹ️ Searching older releases...")
-            wx.Yield()
-            all_releases = get_gh_release_object(user=user, repo=repo, include_prerelease=include_prerelease, latest_any=latest_any, get_all_releases=True)
-            if all_releases:
-                for release in all_releases:
-                    release_tag = release.get('tag_name', 'unknown')
-                    release_assets = release.get('assets', [])
-                    for asset in release_assets:
-                        match = pattern.match(asset['name'])
-                        if match:
-                            asset_version = 0
-                            if len(match.groups()) > 0:
-                                asset_version = int(match[1])
-                            if asset_version <= variable_version and asset_version > best_version:
-                                best_match = asset
-                                best_version = asset_version
-                                matched_release_tag = release_tag
-                            elif asset_version > variable_version and asset_version < fallback_version:
-                                fallback_match = asset
-                                fallback_version = asset_version
-                                fallback_release_tag = release_tag
-                    if best_match:
-                        break
-                if best_match:
-                    print(f"ℹ️ Found matching asset in release {matched_release_tag}: {best_match['name']}")
-                    download_file(best_match['browser_download_url'])
-                    print(f"Downloaded {best_match['name']}")
-                    return best_match['name']
-                elif fallback_match:
-                    print(f"ℹ️ Found asset in release {fallback_release_tag} (closest higher version): {fallback_match['name']}")
-                    download_file(fallback_match['browser_download_url'])
-                    print(f"Downloaded {fallback_match['name']}")
-                    return fallback_match['name']
-                else:
-                    print(f"⚠️ No matching asset found in any release for {asset_name}")
-            else:
-                print(f"⚠️ No releases found to search")
-
-        if not should_search or not best_match:
-            print("ℹ️ To see all available assets, enable the checkbox [Search older releases if asset not found in latest] when selecting kernel flavor.\n")
+            if response == wx.YES:
+                return download_ksu_latest_release_asset(
+                    user=user, repo=repo, asset_name=asset_name,
+                    anykernel=anykernel, custom_kernel=custom_kernel,
+                    include_prerelease=include_prerelease, latest_any=latest_any,
+                    version_choice=version_choice, get_all=get_all, all_releases=True
+                )
+            print("ℹ️ You can also select 'All releases (including older ones)' from the radio options to search automatically.\n")
+        else:
+            print(f"⚠️ No matching asset found in any release for {asset_name}")
     except Exception as e:
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error in download_ksu_latest_release_asset function")
         traceback.print_exc()

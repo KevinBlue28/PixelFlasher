@@ -81,14 +81,21 @@ class KsuAssetSelectorDialog(wx.Dialog):
         self.asset_list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         self.asset_list.AppendColumn(_("Asset Name"), width=500)
         self.asset_list.AppendColumn(_("Version"), width=100)
-        self.asset_list.AppendColumn(_("Size"), width=120)
+        self.asset_list.AppendColumn(_("Release"), width=220)
+        self.asset_list.AppendColumn(_("Size"), width=100)
 
         main_sizer.Add(self.asset_list, 1, wx.ALL | wx.EXPAND, 10)
 
         # Suggested text
         self.suggested_text = None
         if suggested_asset:
-            self.suggested_text = wx.StaticText(self, label=_("Suggested: %s") % suggested_asset['name'])
+            release_info = suggested_asset.get('release_tag', '')
+            if suggested_asset.get('release_date'):
+                release_info = f"{suggested_asset['release_tag']} ({suggested_asset['release_date']})"
+            suggested_label = f"{suggested_asset['name']}"
+            if release_info:
+                suggested_label += f" [{release_info}]"
+            self.suggested_text = wx.StaticText(self, label=_("Suggested: %s") % suggested_label)
             self.suggested_text.SetFont(self.suggested_text.GetFont().Bold())
             main_sizer.Add(self.suggested_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -112,7 +119,7 @@ class KsuAssetSelectorDialog(wx.Dialog):
         screen_size = display.GetGeometry().GetSize()
 
         # Desired size
-        desired_width = 840
+        desired_width = 1030
         desired_height = 950
 
         # Leave some margin from screen edges
@@ -156,6 +163,7 @@ class KsuAssetSelectorDialog(wx.Dialog):
     def populate_list(self, suggested_asset=None):
         self.asset_list.DeleteAllItems()
 
+        found_better_match = False
         for i, asset in enumerate(self.filtered_assets):
             index = self.asset_list.InsertItem(i, asset['name'])
 
@@ -163,6 +171,19 @@ class KsuAssetSelectorDialog(wx.Dialog):
             match = re.search(r'\.([0-9]+)(?:_.*|)-', asset['name'])
             version = match.group(1) if match else _("Unknown")
             self.asset_list.SetItem(index, 1, version)
+
+            # Format release info
+            release_tag = asset.get('release_tag', '')
+            release_date = asset.get('release_date', '')
+            if release_tag and release_date:
+                release_info = f"{release_tag} ({release_date})"
+            elif release_tag:
+                release_info = release_tag
+            elif release_date:
+                release_info = release_date
+            else:
+                release_info = _("Unknown")
+            self.asset_list.SetItem(index, 2, release_info)
 
             # Format size
             size_bytes = asset.get('size', 0)
@@ -172,12 +193,20 @@ class KsuAssetSelectorDialog(wx.Dialog):
                 size_str = f"{size_bytes / 1024:.1f} KB"
             else:
                 size_str = f"{size_bytes} B"
-            self.asset_list.SetItem(index, 2, size_str)
+            self.asset_list.SetItem(index, 3, size_str)
 
             # Select suggested asset
             if suggested_asset and asset['name'] == suggested_asset['name']:
-                self.asset_list.Select(index)
-                self.asset_list.Focus(index)
+                if suggested_asset['release_tag'] == asset.get('release_tag', ''):
+                    found_better_match = True
+                    self.asset_list.Select(index)
+                    self.asset_list.Focus(index)
+                    print(f"Suggested asset match: {suggested_asset['name']}, release: {suggested_asset['release_tag']} ({suggested_asset['release_date']})")
+                    wx.Yield()
+
+                if not found_better_match:
+                    self.asset_list.Select(index)
+                    self.asset_list.Focus(index)
 
     def on_filter_changed(self, event):
         filter_text = self.filter_text.GetValue()
@@ -186,13 +215,16 @@ class KsuAssetSelectorDialog(wx.Dialog):
         self.populate_list()
 
     def on_filter_cleared(self, event):
+        self.filter_text.SetValue('')
         self.filtered_assets = self.assets.copy()
         self.populate_list()
+        event.Skip()
 
     def on_ok(self, event):
         selected_index = self.asset_list.GetFirstSelected()
         if selected_index != -1:
             self.selected_asset = self.filtered_assets[selected_index]
+            print(f"User selected asset: {self.selected_asset['name']}, release: {self.selected_asset.get('release_tag', 'unknown')} ({self.selected_asset.get('release_date', '')})")
             self.EndModal(wx.ID_OK)
         else:
             wx.MessageBox(_("Please select an asset."), _("No Selection"), wx.OK | wx.ICON_WARNING)

@@ -2296,8 +2296,8 @@ def kernel_flavors(self, default_button, radio_initial_value, kernel_recommendat
     if default_button < 1 or default_button > len(button_texts):
         default_button = 1
     button_texts[default_button -1] += _(" (Recommended)")
-    radio_labels=[_("Latest Release"), _("Latest Pre-Release"), _("Latest Release or Pre-Release")]
-    checkbox_labels=[_("Let me choose the kernel version from a matching list"), _("Show all assets including non-matching ones"), _("Search older releases if asset not found in latest")]
+    radio_labels=[_("Latest Release"), _("Latest Pre-Release"), _("Latest Release or Pre-Release"), _("All releases (including older ones)")]
+    checkbox_labels=[_("Let me choose the kernel version from a matching list"), _("Show all assets including non-matching ones")]
     if not checkbox_initial_values:
         checkbox_initial_values=[False, False]
 
@@ -2314,6 +2314,7 @@ def kernel_flavors(self, default_button, radio_initial_value, kernel_recommendat
   - **Latest Release:** Picks the latest stable release of the selected kernel flavor.
   - **Latest Pre-Release:** Picks the latest pre-release of the selected kernel flavor.
   - **Latest Release or Pre-Release:** Picks the latest available release, whether stable or pre-release.
+  - **All releases (including older ones):** Searches through all releases to find the best match.
 
 Depending on the selected rooting app option,
 PixelFlasher will offer available choices and recommend a suitable kernel flavor.<br/>
@@ -4220,23 +4221,27 @@ Unless you know what you're doing, it is recommended that you choose the default
 
         # Check the radio button selection
         if res['radio_selection'] == 0:     # Release builds only
-            include_prerelease = False,
+            include_prerelease = False
             latest_any = False
+            all_releases = False
         elif res['radio_selection'] == 1:   # Pre-Release builds only
-            include_prerelease = True,
+            include_prerelease = True
             latest_any = False
-        elif  res['radio_selection'] == 2:  # Release and Pre-Release builds
-            include_prerelease = True,
+            all_releases = False
+        elif res['radio_selection'] == 2:  # Release and Pre-Release builds
+            include_prerelease = True
             latest_any = True
+            all_releases = False
+        elif res['radio_selection'] == 3:  # All releases (including older ones)
+            include_prerelease = True
+            latest_any = True
+            all_releases = True
 
         # Check if version_choice checkbox is selected
         version_choice = res['checkbox_values'][0]
 
         # Check if get_all checkbox is selected
         get_all = res['checkbox_values'][1]
-
-        # Check if search_all_releases checkbox is selected
-        search_all_releases = res['checkbox_values'][2] if len(res['checkbox_values']) > 2 else False
 
         # Get checkbox values from the result
         checkbox_values = res.get('checkbox_values', [])
@@ -4293,7 +4298,18 @@ Unless you know what you're doing, it is recommended that you choose the default
 
         if res['button'] != 6:
             # download the selected KernelSU generic kernel image
-            kernel_su_gz_file = download_ksu_latest_release_asset(user=user, repo=repo, asset_name=look_for_kernelsu, anykernel=anykernel, custom_kernel=custom_kernel, include_prerelease = include_prerelease, latest_any=latest_any, version_choice=version_choice, get_all=get_all, search_all_releases=search_all_releases)
+            kernel_su_gz_file = download_ksu_latest_release_asset(
+                                    user=user,
+                                    repo=repo,
+                                    asset_name=look_for_kernelsu,
+                                    anykernel=anykernel,
+                                    custom_kernel=custom_kernel,
+                                    include_prerelease = include_prerelease,
+                                    latest_any=latest_any,
+                                    version_choice=version_choice,
+                                    get_all=get_all,
+                                    all_releases=all_releases
+                                )
             if kernel_su_gz_file:
                 kernelsu_version = get_gh_latest_release_version(user, repo)
 
