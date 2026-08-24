@@ -729,6 +729,10 @@ class Device():
                 android_version = "15"
             elif major == 6 and minor == 10:
                 android_version = "16"
+            elif major == 6 and minor == 12:
+                android_version = "17"
+            elif major == 7 and minor == 1:
+                android_version = "17"
 
             if android_version:
                 return f"{major}.{minor}.{patch}-android{android_version}"
@@ -4670,6 +4674,9 @@ add_hosts_module
                 debug(theCmd)
                 res = run_shell(theCmd, timeout=timeout)
                 if res and isinstance(res, subprocess.CompletedProcess) and res.returncode == 1:
+                    debug(f"Returncode: {res.returncode}")
+                    debug(f"Stdout: {res.stdout}")
+                    debug(f"Stderr: {res.stderr}")
                     print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: during slot switch")
                     return -1
                 return res

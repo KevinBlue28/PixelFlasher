@@ -3158,7 +3158,7 @@ def parse_device_list_html(ul_content):
 # ============================================================================
 #                 Function get_gsi_data
 # ============================================================================
-def get_gsi_data(force_version=None) -> tuple[BetaData | None, bool | None]:
+def get_gsi_data(force_version=None, latest_version_url=None) -> tuple[BetaData | None, bool | None, str | None]:
     try:
         error = False
         # URLs
@@ -3169,18 +3169,22 @@ def get_gsi_data(force_version=None) -> tuple[BetaData | None, bool | None]:
         response = request_with_fallback('GET', gsi_url)
         if response == 'ERROR' or response.status_code != 200:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Failed to fetch GSI HTML")
-            return None, False
+            return None, False, None
         gsi_html = response.text
 
         # Parse GSI HTML
         soup = BeautifulSoup(gsi_html, 'html.parser')
 
+        if force_version:
+            force_version = str(force_version)
+            force_version = force_version.replace('/', '-')
+            force_version = force_version.replace('\'', '-')
         id_to_find = f"android-gsi-{force_version}"
         # get the position of id_to_find
         pos = gsi_html.find(id_to_find)
         if pos == -1:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: GSI version {force_version} not found in HTML")
-            return None, False
+            return None, False, None
         # Move to that position
         gsi_html = gsi_html[pos:]
         # Parse the HTML again with the new gsi_html
@@ -3194,10 +3198,20 @@ def get_gsi_data(force_version=None) -> tuple[BetaData | None, bool | None]:
         release = soup.find('a', string=lambda x: x and 'corresponding Google Pixel builds' in x)
         if not release:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Release version not found")
-            return None, False
+            return None, False, None
 
         href = release['href']
-        release_version = href.split('/')[3]
+        release_version = ''
+        if len(href.split('/')) > 3:
+            release_version = href.split('/')[3]
+        else:
+            print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Release version not found in href")
+            return None, False, None
+        release_qpr = ''
+        if len(href.split('/')) > 4:
+            release_qpr = href.split('/')[4]
+            if release_qpr == 'get':
+                release_qpr = ''
         if release_version != str(force_version):
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Fetched Release version {release_version} does not match requested version {force_version}")
 
@@ -3235,7 +3249,7 @@ def get_gsi_data(force_version=None) -> tuple[BetaData | None, bool | None]:
                 print(f"\n⚠️ {datetime.now():%Y-%m-%d %H:%M:%S} WARNING: Could not extract date from build ID: {build_id}")
         else:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Build ID not found")
-            return None, False
+            return None, False, None
 
         if security_patch_level_text:
             security_patch_level_date = security_patch_level_text.split('Security patch level: ')[1].split('\n')[0]
@@ -3252,7 +3266,7 @@ def get_gsi_data(force_version=None) -> tuple[BetaData | None, bool | None]:
             beta_expiry_date = beta_expiry.strftime('%Y-%m-%d')
         else:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Security patch level date not found")
-            return None, False
+            return None, False, None
 
         # Find the incremental value
         incremental = None
@@ -3261,7 +3275,7 @@ def get_gsi_data(force_version=None) -> tuple[BetaData | None, bool | None]:
             incremental = match.group(1)
         else:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Incremental not found")
-            return None, False
+            return None, False, None
 
         devices = []
         table = soup.find('table')
@@ -3306,12 +3320,12 @@ def get_gsi_data(force_version=None) -> tuple[BetaData | None, bool | None]:
         ret_obj.product_list = product_list
         # append the release['href] to ret_obj
         ret_obj.release_href = release['href']
-        return ret_obj, error
+        return ret_obj, error, f"{release_version}/{release_qpr}" if release_qpr else release_version
 
     except Exception as e:
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while getting GSI data.")
         traceback.print_exc()
-        return None, None
+        return None, None, None
 
 
 # ============================================================================
@@ -3687,7 +3701,7 @@ def get_beta_factory_object(product, canary = True, active = True, latest = True
 # ============================================================================
 #                               Function find_canary_url
 # ============================================================================
-def find_canary_url(api_level=36):
+def find_canary_url(api_level=37):
     try:
         for i in range(9, 0, -1):
             url = f"https://dl.google.com/android/repository/sys-img/google_apis/arm64-v8a-{api_level}.0-CANARY_r{i:02d}.zip"
@@ -3854,12 +3868,24 @@ def get_beta_pif(device_model='random', force_version=None, state=None):
         # If force_version is provided but no valid latest version is found, use the forced version
         if force_version and latest_version == 0:
             latest_version = force_version
-        # set the url to the latest version
-        ota_url = f"https://developer.android.com/about/versions/{latest_version}/download-ota"
-        factory_url = f"https://developer.android.com/about/versions/{latest_version}/download"
+        # set the url to the latest version url or the default url if not available
+        ota_version_string = ''
+        if latest_version_url:
+            ota_url = f"{latest_version_url}/download-ota"
+            factory_url = f"{latest_version_url}/download"
+            ota_version_string = f"{latest_version}/{latest_version_url.split('/')[-1]}"
+            factory_version_string = f"{latest_version}/{latest_version_url.split('/')[-1]}"
+        else:
+            ota_url = f"https://developer.android.com/about/versions/{latest_version}/download-ota"
+            factory_url = f"https://developer.android.com/about/versions/{latest_version}/download"
+            ota_version_string = str(latest_version)
+            factory_version_string = str(latest_version)
         if not force_version and latest_version_url:
             ota_url = f"{latest_version_url}/download-ota"
             factory_url = f"{latest_version_url}/download"
+        if force_version:
+            ota_version_string = str(force_version)
+            factory_version_string = str(force_version)
 
         # Fetch OTA HTML
         ota_data, ota_error = get_beta_data(ota_url)
@@ -3874,7 +3900,7 @@ def get_beta_pif(device_model='random', force_version=None, state=None):
         # print(factory_data.__dict__)
 
         # Fetch GSI HTML
-        gsi_data, gsi_error = get_gsi_data(force_version=force_version or latest_version)
+        gsi_data, gsi_error, gsi_version_string = get_gsi_data(force_version=force_version or str(latest_version), latest_version_url=latest_version_url)
         if not gsi_data:
             print(f"❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Failed to get beta or Developer Preview GSI data for Android {latest_version}")
         # print(gsi_data.__dict__)
@@ -3898,6 +3924,8 @@ def get_beta_pif(device_model='random', force_version=None, state=None):
                 print(f"Beta OTA Date:            {ota_date}")
         else:
             print(f"Beta OTA:                 Unavailable")
+        print(f"Beta OTA URL:             {ota_url}")
+        print(f"Beta OTA Version:         {ota_version_string}")
 
         if factory_data:
             factory_date = factory_data.__dict__['release_date']
@@ -3908,6 +3936,8 @@ def get_beta_pif(device_model='random', force_version=None, state=None):
                 print(f"Beta Factory Date:        {factory_date}")
         else:
             print(f"Beta Factory:             Unavailable")
+        print(f"Beta Factory URL:         {factory_url}")
+        print(f"Beta Factory Version:     {factory_version_string}")
 
         if gsi_data:
             gsi_date = gsi_data.__dict__['release_date']
@@ -3916,8 +3946,10 @@ def get_beta_pif(device_model='random', force_version=None, state=None):
                 print(f"Beta GSI Date:            {gsi_date} (❌ Possible problems with GSI date)")
             else:
                 print(f"Beta GSI Date:            {gsi_date}")
+            print(f"Beta GSI Version:         {gsi_version_string}")
         else:
             print(f"Beta GSI:                 Unavailable")
+        print(f"Beta GSI URL:             https://developer.android.com/topic/generic-system-image/releases")
 
         # Determine the latest date(s)
         newest_data = []
@@ -3991,7 +4023,15 @@ def get_beta_pif(device_model='random', force_version=None, state=None):
             source = item[1]
             source = source.replace("_error", "")
             # message += f"{source}:  {the_date}\n"
-            message += f"{source:<10}: {the_date.strftime('%B %d, %Y')}\n"
+            if source == 'ota':
+                version_string = ota_version_string
+            elif source == 'factory':
+                version_string = factory_version_string
+            elif source == 'gsi':
+                version_string = gsi_version_string
+            else:
+                version_string = ''
+            message += f"{source:<10}: {the_date.strftime('%B %d, %Y')}  [{version_string}]\n"
         message += f"</pre>"
 
         clean_message = message.replace("<br/>", "").replace("</pre>", "").replace("<pre>", "")
@@ -4493,7 +4533,9 @@ def get_latest_android_version(force_version=None):
     version = 0
     beta_link_url = ''
     beta_links = {}
+    found_versions = []  # Track all found versions for debugging
 
+    debug(f"Parsing versions page for Android versions and beta links, for version {force_version if force_version else 'latest'} ...")
     for link in soup.find_all('a'):
         # Look for Android Beta link
         span = link.find('span', class_='devsite-nav-text')
@@ -4510,22 +4552,37 @@ def get_latest_android_version(force_version=None):
                 match = re.search(r'about/versions/(\d+)', full_url)
                 if match:
                     ver = int(match.group(1))
+                    debug(f"Found Android Beta link: version {ver}, URL: {full_url}")
                     # Only store if not already present (assuming descending order on page, first is newest)
                     if ver not in beta_links:
                         beta_links[ver] = full_url
 
         # Look for version links
         href = link.get('href')
-        if href and re.match(r'https:\/\/developer\.android\.com\/about\/versions\/\d+', href):
-            # capture the d+ part
-            match = re.search(r'\d+', href)
-            link_version = int(match.group()) if match else 0
-            if force_version and not str(force_version).startswith('CANARY'):
-                if link_version == force_version:
-                    version = link_version
-            else:
-                if link_version > version:
-                    version = link_version
+        if href:
+            # Check if it matches the pattern and log details
+            if 'about/versions' in href and re.search(r'about/versions/(\d+)', href):
+                match = re.search(r'about/versions/(\d+)', href)
+                link_version = int(match.group(1)) if match else 0
+                if link_version > 0:
+                    # Convert relative URL to absolute if needed
+                    absolute_url = href
+                    if href.startswith('/'):
+                        absolute_url = f"https://developer.android.com{href}"
+                    debug(f"Found version link: {link_version}, full URL: {absolute_url}")
+                    found_versions.append(link_version)
+                    if force_version and not str(force_version).startswith('CANARY'):
+                        if link_version == force_version:
+                            version = link_version
+                    else:
+                        if link_version > version:
+                            version = link_version
+
+    if found_versions:
+        debug(f"Found Android versions: {sorted(set(found_versions), reverse=True)}")
+        debug(f"Selected latest version: {version}")
+
+    debug(f"Beta links found: {beta_links}")
 
     # Determine best beta link
     if force_version and not str(force_version).startswith('CANARY'):
@@ -4541,6 +4598,7 @@ def get_latest_android_version(force_version=None):
         if beta_links:
             max_ver = max(beta_links.keys())
             beta_link_url = beta_links[max_ver]
+            debug(f"Using beta link for version {max_ver}: {beta_link_url}")
 
     # Check for QPR updates on the specific version page
     if version > 0:

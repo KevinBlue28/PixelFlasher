@@ -6043,8 +6043,9 @@ class PixelFlasher(wx.Frame):
                 print("Selected Boot:")
                 print("==============")
                 puml(":Select Boot;\n", True)
-                message = f"File:                     {os.path.basename(urlparse(boot.boot_path).path)}\n"
-                message += f"Path:                     {boot.boot_path}\n"
+                boot_path = boot.boot_path or ''
+                message = f"File:                     {os.path.basename(urlparse(boot_path).path)}\n"
+                message += f"Path:                     {boot_path}\n"
                 message += f"SHA1:                     {boot.boot_hash}\n"
                 if boot.is_patched == 1:
                     patched = True
@@ -6141,7 +6142,8 @@ class PixelFlasher(wx.Frame):
         try:
             boot = get_boot()
             if boot:
-                info = get_boot_image_info(boot.boot_path)
+                boot_path = boot.boot_path or ''
+                info = get_boot_image_info(boot_path)
 
         except Exception as e:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while getting boot info")
@@ -6200,7 +6202,7 @@ class PixelFlasher(wx.Frame):
         try:
             self._on_spin('start')
             boot = get_boot()
-            if boot:
+            if boot and boot.boot_path:
                 open_folder(self, boot.boot_path, True)
         except Exception as e:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while opening boot folder")

@@ -3395,36 +3395,6 @@ def patch_boot_img(self, patch_flavor = 'Magisk'):
     def patch_apatch_script(patch_method="app", kernel_patch_version=""):
         assert device is not None
         path_to_busybox = ''
-        dialog = wx.TextEntryDialog(None,
-            "The SUPERKEY has higher privileges than root access.\n"
-            "Weak or compromised keys can result in unauthorized control of your device.\n"
-            "It is critical to use robust keys and safeguard them from exposure to maintain the security of your device.\n\n"
-            "The length of superkey should be at least 8 characters and include both numbers and letters.",
-            "Please enter a Superkey", style=wx.OK | wx.CANCEL)
-
-        while True:
-            if dialog.ShowModal() == wx.ID_OK:
-                superkey = dialog.GetValue()
-                if len(superkey) < 8:
-                    print("Superkey is too short. It should be at least 8 characters.")
-                    puml("#red:Superkey is too short. It should be at least 8 characters.;\n")
-                    continue
-                if not any(char.isdigit() for char in superkey):
-                    print("Superkey should include at least one number.")
-                    puml("#red:Superkey should include at least one number.;\n")
-                    continue
-                if not any(char.isalpha() for char in superkey):
-                    print("Superkey should include at least one letter.")
-                    puml("#red:Superkey should include at least one letter.;\n")
-                    continue
-                break  # Valid input received
-            else:
-                print("User cancelled.")
-                print("Aborting ...\n")
-                dialog.Destroy()
-                return -1
-
-        dialog.Destroy()
 
         print("Creating pf_patch.sh script ...")
         if patch_method == "rooted":
@@ -3457,6 +3427,64 @@ def patch_boot_img(self, patch_flavor = 'Magisk'):
             print(f"ERROR: Unsupported patch method: {patch_method}")
             puml("#red:Unsupported patch method;\n")
             return -1
+
+        skip_magiskboot = False
+        try:
+            version_code_int = int(with_version_code)
+        except (ValueError, TypeError):
+            # Handle the case where conversion fails assume very high version code
+            version_code_int = 9999999
+            print(f"⚠️ Warning: Could not convert version code '{with_version_code}' to integer, using default value")
+        if version_code_int >= 11219:
+            # as of SukiSU 4.1.3 (version code 40796), magiskboot flag is not accepted
+            skip_magiskboot = True
+
+        skip_superkey = False
+        superkey = ""
+        # As of APatch version 11224 boot_patch.sh doesn't yet handle empty superkey.
+        # Until APatch fixes this, let's skip this dialog when not in manual mode.
+        # if skip_magiskboot:
+        if skip_magiskboot and patch_method == "manual":
+            # present a yes / no dialog to ask the user if they want to use a custom superkey for the patching process
+            dialog1 = wx.MessageDialog(None,
+                "The current version of APatch can create a patch without a custom superkey. (Default)\n"
+                "If you choose to use a custom superkey, you will be prompted to enter one.\n\n"
+                "Do you want to use a custom superkey?",
+                "Custom Superkey",
+                style=wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING)
+            if dialog1.ShowModal() == wx.ID_NO:
+                skip_superkey = True
+            dialog1.Destroy()
+        if not skip_superkey:
+            dialog = wx.TextEntryDialog(None,
+                "The SUPERKEY has higher privileges than root access.\n"
+                "Weak or compromised keys can result in unauthorized control of your device.\n"
+                "It is critical to use robust keys and safeguard them from exposure to maintain the security of your device.\n\n"
+                "The length of superkey should be at least 8 characters and include both numbers and letters.",
+                "Please enter a Superkey", style=wx.OK | wx.CANCEL)
+            while True:
+                if dialog.ShowModal() == wx.ID_OK:
+                    superkey = dialog.GetValue()
+                    if len(superkey) < 8:
+                        print("Superkey is too short. It should be at least 8 characters.")
+                        puml("#red:Superkey is too short. It should be at least 8 characters.;\n")
+                        continue
+                    if not any(char.isdigit() for char in superkey):
+                        print("Superkey should include at least one number.")
+                        puml("#red:Superkey should include at least one number.;\n")
+                        continue
+                    if not any(char.isalpha() for char in superkey):
+                        print("Superkey should include at least one letter.")
+                        puml("#red:Superkey should include at least one letter.;\n")
+                        continue
+                    break  # Valid input received
+                else:
+                    print("User cancelled.")
+                    print("Aborting ...\n")
+                    dialog.Destroy()
+                    return -1
+
+            dialog.Destroy()
 
         set_patched_with(with_version)
         puml(f":Patching with {patch_label}: {with_version};\n", True)
@@ -3497,38 +3525,57 @@ def patch_boot_img(self, patch_flavor = 'Magisk'):
                     # unpack ramdisk.cpio from init_boot.img first and place it in the assets folder
                     data += "echo \"Extracting ramdisk from init_boot ...\"\n"
                     data += f"cp {self.config.phone_path}/{init_boot_img} ./init_boot.img\n"
-                    data += "./magiskboot unpack init_boot.img\n"
+                    if not skip_magiskboot:
+                        data += "./magiskboot unpack init_boot.img\n"
             elif patch_method == "manual":
                 data += "ARCH=$(uname -m)\n"
                 data += "cd /data/local/tmp\n"
                 data += "rm -rf pf || { echo 'ERROR: Failed to remove directory pf'; exit 1; }\n"
                 data += "mkdir pf || { echo 'ERROR: Failed to create directory pf'; exit 1; }\n"
                 data += "cd pf\n"
-                data += "mv ../magiskboot .\n"
+                if not skip_magiskboot:
+                    data += "mv ../magiskboot .\n"
                 data += "mv ../kptools-android .\n"
+                data += "cp kptools-android kptools\n"
                 data += "mv ../kpimg-android .\n"
+                data += "cp kpimg-android kpimg\n"
                 data += "chmod 755 *\n"
                 if boot_path is not None:
                     # unpack boot.img
                     data += f"cp {self.config.phone_path}/{boot_img} ./boot.img\n"
                     data += f"echo \"Unpacking boot.img [{boot_img}] ...\"\n"
-                    data += "./magiskboot unpack boot.img\n"
+                    if skip_magiskboot:
+                        data += "./kptools-android unpack boot.img\n"
+                    else:
+                        data += "./magiskboot unpack boot.img\n"
                     data += "mv kernel kernel-b\n"
                 else:
                     print("ERROR: boot.img not found")
                     puml("#red:boot.img not found;\n")
                     return -1
                 data += "echo \"Creating a patch ...\"\n"
-                data += f"./kptools-android -p --image kernel-b --skey \'{superkey}\' --kpimg kpimg-android --out kernel\n"
+                if skip_superkey:
+                    data += f"./kptools-android -p --image kernel-b --kpimg kpimg-android --out kernel\n"
+                else:
+                    data += f"./kptools-android -p --image kernel-b --skey \'{superkey}\' --kpimg kpimg-android --out kernel\n"
                 data += "echo \"Repacking boot.img ...\"\n"
-                data += "./magiskboot repack boot.img\n"
+                if skip_magiskboot:
+                    data += "./kptools-android repack boot.img\n"
+                else:
+                    data += "./magiskboot repack boot.img\n"
                 data += "PATCHING_APATCH_VERSION=$(/data/local/tmp/pf/./kptools-android -v)\n"
                 data += "echo \"PATCHING_APATCH_VERSION: $PATCHING_APATCH_VERSION\"\n"
 
             if patch_method != "manual":
                 data += "echo \"Creating a patch ...\"\n"
-                data += f"./boot_patch.sh {superkey} {self.config.phone_path}/{boot_img} -K kpatch\n"
-            data += "PATCH_SHA1=$(./magiskboot sha1 new-boot.img | cut -c-8)\n"
+                if skip_magiskboot:
+                    data += f"./boot_patch.sh {superkey} {self.config.phone_path}/{boot_img}\n"
+                else:
+                    data += f"./boot_patch.sh {superkey} {self.config.phone_path}/{boot_img} -K kpatch\n"
+            if skip_magiskboot:
+                data += "PATCH_SHA1=$(./kptools sha1 new-boot.img | cut -c-8)\n"
+            else:
+                data += "PATCH_SHA1=$(./magiskboot sha1 new-boot.img | cut -c-8)\n"
             data += "echo \"PATCH_SHA1:     $PATCH_SHA1\"\n"
             data += f"PATCH_FILENAME={patch_name}_${{APATCH_VERSION}}_${{STOCK_SHA1}}_${{PATCH_SHA1}}.img\n"
             data += "echo \"PATCH_FILENAME: $PATCH_FILENAME\"\n"
@@ -3822,9 +3869,32 @@ def patch_boot_img(self, patch_flavor = 'Magisk'):
             anykernel = True
         else:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: KernelSU (Next) / SukiSU / Wild_KSU patching in PixelFlasher is only supported on Pixel devices")
-            print("Aborting ...\n")
-            puml("#red:KernelSU (Next) / SukiSU / Wild_KSU is only supported on Pixel Devices;\n}\n")
-            return
+
+            # add a dialog to ask if the user wants to continue regardless of the device not being a Pixel device.
+            # The device could be a new Pixel device that is not yet in the list of supported devices, or it could be a custom ROM that is not yet supported.
+            title = _("Non-Pixel Device Detected")
+            message_en =  f"Patching is only supported on Pixel devices.\n"
+            message_en += f"If your device is a newer Pixel device, it may not be in the list of supported devices yet.\n\n"
+            message_en += "Do you want to continue regardless?\n\n"
+            message_en += "Click Yes to continue or Hit No to abort."
+            message =  _("Patching is only supported on Pixel devices.\n")
+            message += _("If your device is a newer Pixel device, it may not be in the list of supported devices yet.\n\n")
+            message += _("Do you want to continue regardless?\n")
+            message += _("Click Yes to continue or Hit No to abort.")
+            print(f"\n*** Dialog ***\n{message_en}\n______________\n")
+            puml("#orange:Assume Pixel Device;\n", True)
+            puml(f"note right\n{message_en}\nend note\n")
+            dlg = wx.MessageDialog(None, message, title, wx.YES_NO | wx.NO_DEFAULT | wx.ICON_EXCLAMATION)
+            result = dlg.ShowModal()
+            if result == wx.ID_YES:
+                print(f"User chose to force assume Pixel Device and continued")
+                puml(":User chose to force assume Pixel Device and continued;\n")
+                anykernel = True
+            else:
+                print(f"User chose to cancel forcing assume Pixel Device and aborted")
+                puml(":User chose to cancel forcing assume Pixel Device and aborted;\n")
+                print("Aborting ...\n")
+                return -1
 
     file_to_patch: str = ""
     file_sha1: str = ""

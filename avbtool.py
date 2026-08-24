@@ -196,6 +196,34 @@ ALGORITHMS = {
                 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
                 0x00, 0x04, 0x40
             ]))),
+    'SHA256_RSA3072': Algorithm(
+        algorithm_type=7,        # AVB_ALGORITHM_TYPE_SHA256_RSA3072
+        hash_name='sha256',
+        hash_num_bytes=32,
+        signature_num_bytes=384,
+        public_key_num_bytes=8 + 2*3072//8,
+        padding=bytes(bytearray([
+            # PKCS1-v1_5 padding
+            0x00, 0x01] + [0xff]*330 + [0x00] + [
+                # ASN.1 header
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+                0x00, 0x04, 0x20,
+            ]))),
+    'SHA512_RSA3072': Algorithm(
+        algorithm_type=8,        # AVB_ALGORITHM_TYPE_SHA512_RSA3072
+        hash_name='sha512',
+        hash_num_bytes=64,
+        signature_num_bytes=384,
+        public_key_num_bytes=8 + 2*3072//8,
+        padding=bytes(bytearray([
+            # PKCS1-v1_5 padding
+            0x00, 0x01] + [0xff]*298 + [0x00] + [
+                # ASN.1 header
+                0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
+                0x00, 0x04, 0x40
+            ]))),
 }
 
 

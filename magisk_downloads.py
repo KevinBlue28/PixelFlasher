@@ -224,8 +224,8 @@ class MagiskDownloads(wx.Dialog):
     # -----------------------------------------------
     def _onItemSelected(self, event):
         self.currentItem = event.Index
-        print(f"Magisk {self.list.GetItemText(self.currentItem)} is selected.")
-        puml(f":Select Magisk {self.list.GetItemText(self.currentItem)};\n")
+        print(f"{self.list.GetItemText(self.currentItem)} is selected.")
+        puml(f":Select {self.list.GetItemText(self.currentItem)};\n")
         event.Skip()
 
     # -----------------------------------------------

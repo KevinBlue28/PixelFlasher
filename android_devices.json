@@ -1,4 +1,40 @@
 {
+    "cubs": {
+        "device": "Google Pixel 11",
+        "android_version_end_date": "August 2033",
+        "security_update_end_date": "August 2033",
+        "first_api_level": "37",
+        "bootloader_codename": "spacecraft",
+        "has_init_boot": true,
+        "is_pixel_watch": false
+    },
+    "grizzly": {
+        "device": "Google Pixel 11 Pro",
+        "android_version_end_date": "August 2033",
+        "security_update_end_date": "August 2033",
+        "first_api_level": "37",
+        "bootloader_codename": "spacecraft",
+        "has_init_boot": true,
+        "is_pixel_watch": false
+    },
+    "kodiak": {
+        "device": "Google Pixel 11 Pro XL",
+        "android_version_end_date": "August 2033",
+        "security_update_end_date": "August 2033",
+        "first_api_level": "37",
+        "bootloader_codename": "spacecraft",
+        "has_init_boot": true,
+        "is_pixel_watch": false
+    },
+    "yogi": {
+        "device": "Google Pixel 11 Pro Fold",
+        "android_version_end_date": "August 2033",
+        "security_update_end_date": "August 2033",
+        "first_api_level": "37",
+        "bootloader_codename": "spacecraft",
+        "has_init_boot": true,
+        "is_pixel_watch": false
+    },
     "stallion": {
         "device": "Google Pixel 10a",
         "android_version_end_date": "March 2033",

@@ -1874,8 +1874,11 @@ class PifManager(wx.Dialog):
                     force_version = None
                     print(f"⚠️ WARNING! The requested Android beta / canary version is not valid: {self.beta_pif_version}. Using latest version instead.")
             else:
-                force_version = None
                 if self.rb_custom.GetValue():
+                    force_version = self.beta_pif_version
+                    print(f"⚠️ WARNING! The requested Android beta / canary version is custom: {self.beta_pif_version}. There might be no matches.")
+                else:
+                    force_version = None
                     print(f"⚠️ WARNING! The requested Android beta / canary version is not valid: {self.beta_pif_version}. Using latest version instead.")
 
             # Create download state for potential abort
