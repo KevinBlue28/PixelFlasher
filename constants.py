@@ -2,7 +2,7 @@
 
 # This file is part of PixelFlasher https://github.com/badabing2005/PixelFlasher
 #
-# Copyright (C) 2025 Badabing2005
+# Copyright (C) 2026 Badabing2005
 # SPDX-FileCopyrightText: 2025 Badabing2005
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -35,7 +35,7 @@
 
 APPNAME = 'PixelFlasher'
 CONFIG_FILE_NAME = 'PixelFlasher.json'
-VERSION = '9.1.5.0'
+VERSION = '9.2.0.0'
 SDKVERSION = '33.0.3'
 MAIN_WIDTH = 1400
 MAIN_HEIGHT = 1040

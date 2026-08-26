@@ -2,7 +2,7 @@
 
 # This file is part of PixelFlasher https://github.com/badabing2005/PixelFlasher
 #
-# Copyright (C) 2025 Badabing2005
+# Copyright (C) 2026 Badabing2005
 # SPDX-FileCopyrightText: 2025 Badabing2005
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -216,7 +216,7 @@ if __name__ == "__main__":
         header = """
 # This file is part of PixelFlasher https://github.com/badabing2005/PixelFlasher
 #
-# Copyright (C) 2025 Badabing2005
+# Copyright (C) 2026 Badabing2005
 # SPDX-FileCopyrightText: 2025 Badabing2005
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #

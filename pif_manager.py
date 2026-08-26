@@ -2,7 +2,7 @@
 
 # This file is part of PixelFlasher https://github.com/badabing2005/PixelFlasher
 #
-# Copyright (C) 2025 Badabing2005
+# Copyright (C) 2026 Badabing2005
 # SPDX-FileCopyrightText: 2025 Badabing2005
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -1718,21 +1718,44 @@ class PifManager(wx.Dialog):
                 else:
                     channel = 'main'
             if result == 1:
-                miner_url = f"https://github.com/Vagelis1608/get_the_canary_miner/tree/{channel}/devices"
+                release_type = 'devices'
             elif result == 2:
-                miner_url = f"https://github.com/Vagelis1608/get_the_canary_miner/tree/{channel}/emulator"
+                release_type = 'emulator'
             elif result == 3:
-                miner_url = f"https://github.com/Vagelis1608/get_the_canary_miner/tree/{channel}/betas"
+                release_type = 'betas'
             else:
                 print(f"{datetime.now():%Y-%m-%d %H:%M:%S} User Pressed Cancel.")
                 print("Aborting ...\n")
                 return -1
 
-            canary_pif = get_canary_miner(device_model='_select_', default_selection=device_model if device else None, miner_url=miner_url)
-            if self.pif_format == 'prop':
-                self.console_stc.SetValue(self.J2P(canary_pif, quiet=True))
+            canary_pif = get_canary_miner(branch=channel, release_type=release_type, default_selection=device_model if device else None)
+
+            # Handle error or unexpected return values gracefully.
+            if isinstance(canary_pif, str) and canary_pif.startswith('ERROR'):
+                # Show the error text directly
+                self.console_stc.SetValue(canary_pif)
+            elif canary_pif is None:
+                self.console_stc.SetValue('No data returned.')
+            elif canary_pif == -1:
+                self.console_stc.SetValue('Error fetching canary data.')
             else:
-                self.console_stc.SetValue(self.P2J(canary_pif))
+                # Expected successful return is a string (file contents) or
+                # structured dict when using the CLI helper. If the user
+                # requested JSON output, try converting safely.
+                if self.pif_format == 'json':
+                    try:
+                        # P2J expects a prop string; ensure we only pass strings
+                        if isinstance(canary_pif, (dict, list)):
+                            # Already structured — pretty-print JSON
+                            self.console_stc.SetValue(json.dumps(canary_pif, indent=4))
+                        else:
+                            self.console_stc.SetValue(self.P2J(str(canary_pif)))
+                    except Exception:
+                        traceback.print_exc()
+                        self.console_stc.SetValue(str(canary_pif))
+                else:
+                    # Default: show raw value
+                    self.console_stc.SetValue(str(canary_pif))
         except Exception:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Exception in onGetCanaryPif function")
             traceback.print_exc()

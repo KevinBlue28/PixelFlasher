@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright (C) 2025 Badabing2005
+# Copyright (C) 2026 Badabing2005
 # SPDX-FileCopyrightText: 2025 Badabing2005
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -32,7 +32,7 @@
 # <https://www.gnu.org/licenses/>.
 
 rm -rf build dist
-VERSION=9.1.5.0
+VERSION=9.2.0.0
 NAME="PixelFlasher"
 DIST_NAME="PixelFlasher"
 

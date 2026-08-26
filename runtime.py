@@ -2,7 +2,7 @@
 
 # This file is part of PixelFlasher https://github.com/badabing2005/PixelFlasher
 #
-# Copyright (C) 2025 Badabing2005
+# Copyright (C) 2026 Badabing2005
 # SPDX-FileCopyrightText: 2025 Badabing2005
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -67,7 +67,7 @@ import urllib3
 import warnings
 from datetime import datetime, timezone, timedelta
 from os import path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 from cryptography import x509
@@ -3716,98 +3716,193 @@ def find_canary_url(api_level=37):
 
 
 # ============================================================================
-#                               Function get_canary_miner
+#                       Function get_canary_miner
 # ============================================================================
-def get_canary_miner(device_model='random', default_selection=None, miner_url=None):
-    if not miner_url:
-        print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: No miner URL provided")
-        return -1
-    # get file list from miner_url
+def get_canary_miner(branch: str,
+                        release_type: str,
+                        default_selection: str | None = None,
+                        device_model: str = 'random',
+                        owner: str = 'Vagelis1608',
+                        repo: str = 'get_the_canary_miner',
+                        fetch_dates: bool = False,
+                        github_token: str | None = None) -> dict | str | None | int:
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+
     try:
-        canary_device = None
-        canary_url = None
-        response = requests.get(miner_url)
-        if response.status_code != 200:
-            print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Failed to fetch Canary PIFs page")
-            return -1
-        page_html = response.text
-        file_list = []
-        directory = path.basename(urlparse(miner_url).path) or "devices"
-
-        # Build file list from the embedded JSON (deduplicated, GitHub repeats entries)
-        file_pattern = rf'{{"name":"([^"]+)","path":"({re.escape(directory)}/[^"]+)","contentType":"file"}}'
-        seen_paths = set()
-        for match in re.findall(file_pattern, page_html):
-            file_name = match[0]
-            if '.pif.prop' not in file_name:
-                continue
-            repo_file_path = match[1]
-            if repo_file_path in seen_paths:
-                continue
-            seen_paths.add(repo_file_path)
-            file_name = file_name.replace('.pif.prop', '')
-            file_path = f"https://raw.githubusercontent.com/Vagelis1608/get_the_canary_miner/refs/heads/{get_config().canary_miner_channel}/{repo_file_path}"
-            file_list.append({"device": file_name, "path": file_path, "repo_path": repo_file_path})
-            if device_model != 'random' and device_model != '_select_' and device_model in file_name:
-                canary_url = file_path
-                canary_device = device_model
-
-        debug(f"Found {len(file_list)} Canary PIF files")
-
-        # Fetch per-file last-commit dates via GitHub API
-        if device_model == '_select_' and file_list:
-            parsed_miner = urlparse(miner_url)
-            miner_pp = [p for p in parsed_miner.path.split('/') if p]
-            if parsed_miner.netloc in ('github.com', 'www.github.com') and len(miner_pp) >= 2:
-                gh_owner, gh_repo = miner_pp[0], miner_pp[1]
-
-                def _fetch_commit_date(item):
-                    try:
-                        r = requests.get(
-                            f"https://api.github.com/repos/{gh_owner}/{gh_repo}/commits",
-                            params={"path": item['repo_path'], "per_page": 1},
-                            timeout=10
-                        )
-                        if r.status_code == 200:
-                            data = r.json()
-                            if data:
-                                item['last_updated'] = data[0]['commit']['committer']['date'][:10]
-                    except Exception:
-                        pass
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=len(file_list)) as executor:
-                    list(executor.map(_fetch_commit_date, file_list))
-                dates_found = sum(1 for item in file_list if 'last_updated' in item)
-                debug(f"Fetched commit dates for {dates_found}/{len(file_list)} files")
-
-        if device_model == 'random':
-            selected_file = random.choice(file_list)
-            canary_url = selected_file['path']
-            canary_device = selected_file['device']
-        elif device_model == '_select_':
-            if len(file_list) == 1:
-                only_file = file_list[0]
-                debug(f"Only one Canary PIF found, auto-selecting {only_file['device']}")
-                canary_url = only_file['path']
-                canary_device = only_file['device']
-            else:
-                result = select_pif_device(file_list, default_selection, device_type="Canary", show_filename=False)
-                canary_url, canary_device = result if result is not None else (None, False)
-            if not canary_url or not canary_device:
-                return "Selection cancelled."
-        elif not canary_url:
-            print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Could not find Canary PIF for device model: {device_model}")
-            return -1
-
-        response = requests.get(canary_url)
-        if response.status_code != 200:
-            print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Failed to fetch Canary PIF file for {canary_device}")
-            return -1
-        pif_content = response.text
-        return pif_content
-
+        r = requests.get(api_url, timeout=15)
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as he:
+        status = getattr(he.response, 'status_code', None)
+        if status == 403:
+            msg = f"ERROR: GitHub API rate limit exceeded for url: {api_url} ({he})"
+            print(msg)
+            return msg
+        print(f"ERROR: Failed to fetch tree from GitHub: {he}")
+        return f"ERROR: {he}"
     except Exception as e:
-        print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Encountered an error while getting Canary Miner data.")
+        print(f"ERROR: Failed to fetch tree from GitHub: {e}")
+        return f"ERROR: {e}"
+
+    data = r.json()
+    if 'tree' not in data:
+        print("ERROR: Unexpected response structure from GitHub API")
+        debug(data)
+        return -1
+
+    entries = data['tree']
+    prefix = release_type.rstrip('/') + '/'
+
+    filtered = [e for e in entries if e.get('path', '').startswith(prefix)]
+    if not filtered:
+        msg = f"No entries found under top-level folder '{release_type}'"
+        print(msg)
+        return msg
+
+    # Build per-file data structures for the selector UI
+    devices = []
+    for e in filtered:
+        # Only consider blob entries (files). 'tree' entries are directories
+        # and should not be treated as selectable files, treating them as
+        # files caused folders like 'baklava' to appear as child filenames.
+        if e.get('type') != 'blob':
+            continue
+        rel = e['path'][len(prefix):]
+        if not rel:
+            continue
+        parts = rel.split('/')
+        if len(parts) == 1:
+            group = ''
+            filename = parts[0]
+        else:
+            group = parts[0]
+            filename = '/'.join(parts[1:])
+
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/{quote(e['path'])}"
+        devices.append({
+            'device': group or release_type,
+            'zip_filename': filename,
+            'url': raw_url,
+            'repo_path': e['path'],
+        })
+
+    # Fetch last-updated dates via GitHub commits API (optional).
+    if devices and fetch_dates:
+        parsed_owner = owner
+        parsed_repo = repo
+
+        def _fetch_commit_date(item):
+            try:
+                commits_url = f"https://api.github.com/repos/{parsed_owner}/{parsed_repo}/commits"
+                r = requests.get(commits_url, params={'path': item['repo_path'], 'per_page': 1}, timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, list) and data:
+                        item['last_updated'] = data[0]['commit']['committer']['date'][:10]
+            except Exception:
+                pass
+
+    # Print grouped tree for debug
+    groups: dict[str, list[dict]] = {}
+    for d in devices:
+        key = d['device']
+        groups.setdefault(key, []).append(d)
+
+    # # For debug purposes, print the grouped structure
+    # print(f"{release_type}\\")
+    # for group in sorted(groups.keys()):
+    #     print(f"  {group}\\")
+    #     for item in sorted(groups[group], key=lambda x: x['zip_filename']):
+    #         lu = item.get('last_updated', '')
+    #         print(f"    {item['zip_filename']}\t{lu}")
+
+    # Build a nested nodes structure and show a Tree dialog
+    try:
+        from factory_image_selector import show_factory_image_dialog
+
+        # Build nodes so that subfolders (first path segment under <release_type>)
+        # become grouped nodes. If there are files directly under the release
+        # folder and there are also subfolders, those root-level files are placed
+        # under a special "(root files)" node so they don't appear as a duplicate
+        # of the release root name.
+        nodes = []
+        root_files = []
+        subgroups: dict[str, list[dict]] = {}
+
+        for group_name in sorted(groups.keys()):
+            for f in groups[group_name]:
+                # derive the path relative to the release_type prefix
+                rel = f['repo_path'][len(prefix):]
+                parts = rel.split('/')
+                if len(parts) == 1:
+                    root_files.append(f)
+                else:
+                    sub = parts[0]
+                    subgroups.setdefault(sub, []).append(f)
+
+        # If there are subfolders, show them as top-level child nodes.
+        # If root-level files exist alongside subfolders, put them under
+        # a "(root files)" node so they aren't mixed with the root label.
+        if subgroups:
+            for sub in sorted(subgroups.keys()):
+                children = []
+                for f in sorted(subgroups[sub], key=lambda x: x['zip_filename']):
+                    data = {
+                        'url': f['url'],
+                        'repo_path': f['repo_path'],
+                        'last_updated': f.get('last_updated'),
+                        'filename': f['zip_filename'],
+                    }
+                    children.append({'label': f['zip_filename'], 'data': data})
+                nodes.append({'label': sub, 'children': children})
+
+            if root_files:
+                root_children = []
+                for f in sorted(root_files, key=lambda x: x['zip_filename']):
+                    data = {
+                        'url': f['url'],
+                        'repo_path': f['repo_path'],
+                        'last_updated': f.get('last_updated'),
+                        'filename': f['zip_filename'],
+                    }
+                    root_children.append({'label': f['zip_filename'], 'data': data})
+                nodes.append({'label': '(root files)', 'children': root_children})
+        else:
+            # No subfolders -> show root files directly under root
+            for f in sorted(root_files, key=lambda x: x['zip_filename']):
+                data = {
+                    'url': f['url'],
+                    'repo_path': f['repo_path'],
+                    'last_updated': f.get('last_updated'),
+                    'filename': f['zip_filename'],
+                }
+                nodes.append({'label': f['zip_filename'], 'data': data})
+
+        title = f"Select a {release_type} file"
+        instruction = f"Select a file from {release_type} to fetch"
+        root_label = release_type
+        selected = show_factory_image_dialog(None, title, instruction, root_label, nodes, size=(700, 600), download_button=False)
+        if not selected:
+            return "Selection cancelled."
+        else:
+            if isinstance(selected, dict):
+                filename = selected.get('filename')
+                if filename:
+                    print(f"Selected: {filename}")
+                else:
+                    print("Selected item (no filename)")
+            else:
+                print("Selected item")
+
+
+        sel_url = selected.get('url') if isinstance(selected, dict) else None
+        if not sel_url:
+            print("No URL for selected item")
+            return -1
+        r = requests.get(sel_url, timeout=15)
+        r.raise_for_status()
+        return r.text
+    except Exception as e:
+        print(f"ERROR showing tree selector or fetching file: {e}")
         traceback.print_exc()
         return -1
 
