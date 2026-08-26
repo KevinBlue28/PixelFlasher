@@ -2021,6 +2021,20 @@ def check_zip_contains_file(zip_file_path, file_to_check, low_mem, nested=False,
 #                               Function check_zip_contains_file_fast
 # ============================================================================
 def check_zip_contains_file_fast(zip_file_path, file_to_check, nested=False, is_recursive=False):
+    def show_low_memory_hint():
+        if get_low_memory():
+            return
+        message = _(
+            "The archive is too large for the fast in-memory ZIP scan. "
+            "Enable the 'System has low memory' option and try again. "
+            "This slower mode uses disk instead of memory for nested archives."
+        )
+        print(f"\n⚠️ {datetime.now():%Y-%m-%d %H:%M:%S} WARNING: Low memory mode recommended because the ZIP file is too large for the fast scan.")
+        try:
+            wx.MessageBox(message, _("Low memory mode recommended"), wx.OK | wx.ICON_WARNING)
+        except Exception:
+            pass
+
     try:
         if not is_recursive:
             debug(f"Looking for {file_to_check} in zipfile {zip_file_path} with zip-nested: {nested}")
@@ -2046,7 +2060,15 @@ def check_zip_contains_file_fast(zip_file_path, file_to_check, nested=False, is_
         except zipfile.BadZipFile:
             print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: File {zip_file_path} is not a zip file or is corrupt, skipping this file ...")
             return ''
+        except MemoryError:
+            show_low_memory_hint()
+            debug(f"file: {file_to_check} was NOT found in checked zip on stack due to memory constraints\n")
+            return ''
         debug(f"file: {file_to_check} was NOT found in checked zip on stack\n")
+        return ''
+    except MemoryError:
+        show_low_memory_hint()
+        debug(f"file: {file_to_check} was NOT found in checked zip on stack due to memory constraints\n")
         return ''
     except Exception as e:
         print(f"\n❌ {datetime.now():%Y-%m-%d %H:%M:%S} ERROR: Failed to check_zip_contains_file_fast. Reason: {e}")
